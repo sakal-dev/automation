@@ -1,34 +1,105 @@
 ---
 name: automation-operate
-description: Operate a repo's sakal agent automation day to day. Use when the user says "why didn't the sweep run", "the agent is stuck", "unblock the queue", "diagnose automation", "upgrade the automation version", "queue this issue for the agent", or anything about automation behaving oddly.
+description: Operate a repo's sakal agent automation day to day — queue typed issues, unblock claude-blocked loops, upgrade engine callers, and diagnose "the sweep didn't run / didn't merge / left a label" from the known GitHub constraints. Use when the user says "queue this for the agent", "why didn't the sweep run", "the agent is stuck", "unblock the queue", "upgrade the automation", or anything about automation behaving oddly.
 ---
 
 # automation-operate
 
-**STATUS: DRAFT STUB — outline only. Written for real after the garage
-extraction.**
+The operations manual as a skill, for repos already onboarded by
+`automation-install`. The diagnosis knowledge below is IN this skill on
+purpose (ported from `docs/github-constraints.md`) — never research these
+afresh. Enforcement lives in the engine; this skill reads, explains, queues,
+and (only with the human) relabels.
 
-The operations manual as a skill. Carries the GitHub-constraints knowledge
-(`docs/github-constraints.md`) so diagnosis starts from the known sharp edges
-instead of rediscovering them.
+## Queue an issue
 
-## Body outline
+1. Pick the type (ten exist — feature, bug, hotfix, chore, refactor, docs,
+   spike, epic, question, security). Unsure → `ISSUE-SKELETONS.md` in
+   `sakal-dev/automation → plugins/sakal-automation/templates/` has the
+   one-page chooser.
+2. Create via `gh issue create` using the MATCHING SKELETON from that file —
+   never a blank issue. Title `<STORY-ID>: <outcome>`. Apply the type label +
+   queue label the skeleton names. Rules that bind: >~5 ACs or >1 module →
+   split under an epic · epics/questions/security are never queued ·
+   `priority:urgent` never auto-merges · spikes merge no code.
+3. Queue = `claude-ready`. Park = remove it. Hands-off merge = the human (not
+   you) adds `auto-merge`, sparingly, per issue.
+4. It runs via the next sweep cron, `gh workflow run claude-daily-sweep.yml`,
+   or an `@claude` mention on the issue for immediate pickup.
 
-1. **Queue** — make an issue eligible (labels, AC shape), check what's queued,
-   in flight, blocked; integrated mode: read the queue via the sakalmaster MCP.
-2. **Diagnose** — the checklist, mapped to the constraints doc:
-   - sweep didn't run → cron is UTC + best-effort; new cron only exists on the
-     default branch; check off-peak minute.
-   - PR has no CI → opened with the built-in `GITHUB_TOKEN` instead of the
-     app token (inert PR).
-   - issue didn't close → `Closes #n` parsed from the PR body, check format.
-   - task stuck claimed → the always() release failed or (integrated) the
-     lease hasn't expired yet.
-   - @claude ignored a comment → the ~1s guard path; check the trigger guard.
-3. **Unblock** — answer a blocked run's question (integrated: Needs-me;
-   standalone: the labelled issue comment), then requeue.
-4. **Upgrade** — move callers to a new engine tag (`@v1` → `@v2`); never point
-   at `@main`; what to re-check after (denylist, labels, secrets).
-5. **Invariant guard** — anything the user asks for that would regress a
-   contract invariant (auto-merge default-on, denylist holes, CLAUDE.md in
-   docs-only) gets flagged, not silently done.
+## Unblock (`claude-blocked` loop)
+
+1. `gh issue list --label claude-blocked` → read the agent's block comment;
+   it states exactly what it needs (that's the contract: block = question).
+2. Answer in an issue comment — a decision, a clarification, or a narrowed
+   scope. Product decisions belong to the human; draft, don't decide.
+3. Remove `claude-blocked` (keep `claude-ready`) → the next sweep retries; or
+   `@claude` in the answer comment for immediate pickup.
+4. Same block twice → the issue is underspecified; rewrite it against its
+   skeleton (usually missing Out-of-scope or Pointers) instead of answering
+   piecemeal a third time.
+
+## Upgrade a repo's callers to a new engine tag
+
+1. `grep -rn "sakal-dev/automation" .github/workflows/` → current pins.
+2. Read the target tag's release notes in `sakal-dev/automation` (breaking
+   input changes are called out there).
+3. **Show the user the diff first** (old→new tag per caller + any new/renamed
+   inputs), then apply on a branch + PR. Never `@main`; floating `v1` moves
+   on its own — explicit upgrades matter only for `v1 → v2` or a frozen
+   `vX.Y.Z` pin.
+4. After merge: one `workflow_dispatch` sweep as a smoke test.
+
+## Diagnose — the checklist (answers inline, from the constraints doc)
+
+**"The sweep didn't run."**
+- Cron is UTC and best-effort: minutes late is normal, ~an hour under load
+  possible, occasional skips real. Check `gh run list --workflow
+  claude-daily-sweep.yml` before assuming breakage.
+- A new/changed cron only exists once the workflow file is on the DEFAULT
+  branch. Unmerged onboarding/upgrade PR = no cron at all.
+- Ran but did nothing? That's the cheap check-for-work gate: no actionable
+  `claude-ready` (all blocked/working/linked-PR) = ~seconds, by design.
+- Silent 403 in the engine = the caller's `permissions:` block lost a line —
+  diff it against `$AUTO/caller-sweep.yml`.
+
+**"The PR didn't merge."**
+- No `auto-merge` label on the issue (or PR) → it's WAITING FOR REVIEW. Not a
+  bug; the default.
+- The named check (`analyze-and-test` unless overridden) must be green — an
+  unrelated failing optional check does NOT block, but a missing/renamed gate
+  check blocks forever: job name and `ci_check_name` input must match.
+- Guardrail files (`CLAUDE.md`, `docs/RULES.md`, `.github/**`) NEVER
+  auto-merge — even labelled, even green. Deliberate; review it by hand.
+- PR opened but CI never ran → it was opened by the workflow's own
+  `GITHUB_TOKEN` (inert, loop-prevention). Agent-opened PRs use the app
+  token; a human clicking the agent's "Create PR" link also works.
+- Docs-only PR waiting on CI that will never run → expected the other way
+  around: docs-only merges WITHOUT CI. If it's stuck, a changed file falls
+  outside `docs_only_paths` — check the file list, not the label.
+
+**"A label is stuck."**
+- `claude-working` outliving a run should be impossible (always() release;
+  the sweep releases ALL, incl. closed issues). If seen: the run was killed
+  before steps ran at all, or permissions lost `issues: write`. Remove by
+  hand, then check `gh run view <id>` for the release step's status.
+- `Closes #n` didn't close the issue → the API linkage lags and
+  GITHUB_TOKEN-merges suppress it; the engine closes explicitly on merge —
+  if it didn't, the closing keyword is missing/typo'd in the PR BODY (that's
+  where it's parsed from).
+- Label edits failing intermittently → API rate limits; the engine's writes
+  are idempotent, retry is safe.
+
+**"@claude ignored a comment."**
+- The ~1s skipped runs on every comment are the GUARD working, not failures.
+- A real mention skipped → check the caller's `if:` survived (diff against
+  `$AUTO/caller-on-demand.yml`) and the comment actually contains `@claude`.
+- Ran but stood down → the issue already had `claude-working` (another run
+  owns it) — that's the per-issue concurrency doing its job.
+
+## Escalation rule
+
+Anything that would weaken an invariant — auto-merge default-on, denylist
+holes, guardrail exceptions, skipping the gate — is flagged to the human and
+refused, even if asked casually. Change requests of that kind go to
+`sakal-dev/automation` as an issue, where the contract lives.
