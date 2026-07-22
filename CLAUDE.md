@@ -39,7 +39,11 @@ call a workflow a "method".
   SakalMaster verifier judge integrated.
 - Integrated claims are **filtered by app**: `claim_next_task(project, app)`.
   If SakalMaster lacks something, request it there — never work around it here.
-- Engine consumed by tag (`@v1`), never `@main`.
+- Engine consumed by tag, never `@main`. `v1` is a floating major tag (moved
+  to each compatible release); immutable `v1.x.y` tags mark the releases
+  (first: `v1.0.0` at garage parity). The engine's internal action refs
+  (`sakal-dev/automation/actions/*@v1`) ride the same floating tag — moving
+  `v1` moves workflows and actions together.
 
 ## Session rules
 

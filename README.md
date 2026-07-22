@@ -50,7 +50,11 @@ Three pieces, all installed by the `automation-install` skill (<30 min, no
 manual YAML):
 
 1. **Callers** — ~10-line workflows `uses:`-ing the engines here, pinned to a
-   tag (`@v1`, never `@main`).
+   tag, never `@main`. Versioning follows the actions-ecosystem convention:
+   **`v1` is a floating major tag** — it always points at the latest
+   compatible engine and is moved on each release; **immutable `v1.x.y` tags**
+   mark the releases themselves (first cut: `v1.0.0` at garage parity).
+   Callers ride `@v1`; pin `@v1.x.y` only if a repo needs to freeze.
 2. **Two scripts** — `tool/setup.sh` and `tool/verify.sh`, owned by the
    project repo. They are the only place stack knowledge lives; the engine is
    stack-blind. This is the whole Flutter/Laravel/React/Electron answer.

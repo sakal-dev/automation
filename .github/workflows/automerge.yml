@@ -20,6 +20,9 @@
 # docs/RULES.md, .github/**) NEVER auto-merge — even with the label, even on
 # green CI: an agent must not be able to weaken its own guardrails via an
 # auto-merged "docs" PR (agent confusion, or injection via issue text).
+# PRECEDENCE: the guardrail check runs FIRST — a file matching BOTH
+# guardrail_paths and docs_only_paths is a guardrail file, and its PR is
+# disqualified from auto-merge entirely; it never reaches the docs-only test.
 #
 # How a repo calls it. Triggers live in the caller: CI completion (normal path
 # for code PRs) plus the PR events that matter for docs-only PRs (which
@@ -170,7 +173,9 @@ jobs:
 
             # GUARDRAIL PATHS never auto-merge. A change to the agent's own
             # rules or to CI always waits for a human — even with `auto-merge`,
-            # even on green CI.
+            # even on green CI. This check runs BEFORE the docs-only test, so
+            # a file matching both lists is treated as guardrail, and the PR
+            # is disqualified from the fast path entirely.
             sensitive=0
             while IFS= read -r f; do
               [ -z "$f" ] && continue
