@@ -1,0 +1,41 @@
+# =============================================================================
+# on-demand.yml — the @claude path (serves METHOD 3: claude-code-action)
+# STATUS: STUB — documents intent only. Extracted from sakalpos-garage next
+# session.
+#
+# What it will do
+#   Handle a human summoning the agent onto a specific issue/PR by mentioning
+#   @claude in a comment. Guard first: comment triggers fire on EVERY comment
+#   (docs/github-constraints.md #6), so the no-op path must decide and exit in
+#   ~1s. When triggered for real: claim the issue (same label semantics as
+#   sweep), brief from the issue + the summoning comment, execute, run the
+#   in-run gate (./tool/verify.sh) BEFORE opening the PR with the app token,
+#   release the claim in an always() step.
+#   This is the push half of method 3; sweep.yml is the pull half.
+#
+# How callers will use it (trigger lives in the CALLER repo, never here):
+#   on:
+#     issue_comment: { types: [created] }
+#   jobs:
+#     on-demand:
+#       if: contains(github.event.comment.body, '@claude')   # cheap outer guard
+#       uses: sakal-dev/automation/.github/workflows/on-demand.yml@v1
+#       secrets: inherit
+#
+# Intended workflow_call inputs: source / project / app as in sweep.yml
+# Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
+# =============================================================================
+name: on-demand
+
+on:
+  workflow_call:
+    # inputs/secrets declared during extraction — see header
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not implemented
+        run: |
+          echo "::error::on-demand.yml is a stub — extraction from sakalpos-garage is the next session"
+          exit 1

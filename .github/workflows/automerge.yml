@@ -1,0 +1,43 @@
+# =============================================================================
+# automerge.yml — label-gated merge (serves METHOD 3, judges ALL methods' PRs)
+# STATUS: STUB — documents intent only. Extracted from sakalpos-garage next
+# session.
+#
+# What it will do
+#   Implement the merge half of the GATE (docs/task-contract.md step 4):
+#   - Merge is OPT-IN per task: only PRs whose task carries the auto-merge
+#     signal are merged; everything else waits for human review (contract
+#     invariant 2 — flipped to opt-in during garage hardening; never regress).
+#   - Requires the gate green: ./tool/verify.sh passed in CI on the PR.
+#   - Docs-only fast path (if the caller enables it) must EXCLUDE CLAUDE.md —
+#     an agent must never weaken its own guardrails via an auto-merged
+#     "docs" PR — and must still respect the hard path denylist.
+#   - All merges happen with the app token, never the built-in GITHUB_TOKEN
+#     (docs/github-constraints.md #3).
+#
+# How callers will use it (trigger lives in the CALLER repo, never here):
+#   on:
+#     pull_request: { types: [labeled, opened, synchronize] }
+#     check_suite:  { types: [completed] }
+#   jobs:
+#     automerge:
+#       uses: sakal-dev/automation/.github/workflows/automerge.yml@v1
+#       secrets: inherit
+#
+# Intended workflow_call inputs: merge method, docs-only fast-path toggle
+# Intended secrets: app-token key
+# =============================================================================
+name: automerge
+
+on:
+  workflow_call:
+    # inputs/secrets declared during extraction — see header
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not implemented
+        run: |
+          echo "::error::automerge.yml is a stub — extraction from sakalpos-garage is the next session"
+          exit 1

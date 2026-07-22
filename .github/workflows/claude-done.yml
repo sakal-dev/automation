@@ -1,0 +1,39 @@
+# =============================================================================
+# claude-done.yml — mechanical label transitions (serves METHOD 3)
+# STATUS: STUB — documents intent only. Extracted from sakalpos-garage next
+# session.
+#
+# What it will do
+#   Move task state because an EVENT happened, never because an agent asserted
+#   it (docs/task-contract.md, gate: github mode). On PR merged → mark the
+#   linked issue done and close it; on PR closed unmerged → return the issue
+#   to the queue. Rules that shaped it:
+#   - Parse the linked issue from the PR BODY — the `Closes #n` API linkage
+#     lags (docs/github-constraints.md #4).
+#   - Label swaps are unconditional and idempotent — label reads can hit rate
+#     limits, so never read-then-write (docs/github-constraints.md #5).
+#
+# How callers will use it (trigger lives in the CALLER repo, never here):
+#   on:
+#     pull_request: { types: [closed] }
+#   jobs:
+#     done:
+#       uses: sakal-dev/automation/.github/workflows/claude-done.yml@v1
+#       secrets: inherit
+#
+# Intended secrets: app-token key
+# =============================================================================
+name: claude-done
+
+on:
+  workflow_call:
+    # inputs/secrets declared during extraction — see header
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not implemented
+        run: |
+          echo "::error::claude-done.yml is a stub — extraction from sakalpos-garage is the next session"
+          exit 1

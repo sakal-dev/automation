@@ -1,0 +1,48 @@
+# =============================================================================
+# sweep.yml — scheduled queue drain (serves METHOD 3: claude-code-action)
+# STATUS: STUB — documents intent only. Implementation arrives in the garage
+# extraction session, parity-tested against sakalpos-garage's inline sweep.
+#
+# What it will do
+#   One run = drain one task: check the source for eligible work (idle runs
+#   must be ~free), claim exactly one task, assemble the brief, run the agent,
+#   run the in-run gate (./tool/verify.sh) BEFORE opening a PR with the app
+#   token, and release the claim mechanically in an always() step.
+#   Dual-source per docs/task-contract.md:
+#     source=github       eligible = "ready"-labelled issues; claim = label swap,
+#                         serialized by a concurrency group
+#     source=sakalmaster  claim_next_task(project, app) via the claim-sakal
+#                         action — atomic lease, ALWAYS filtered by app
+#
+# How callers will use it (trigger lives in the CALLER repo, never here):
+#   on:
+#     schedule:
+#       - cron: '17 */2 * * *'   # off-peak minute, never :00/:30 — GitHub cron
+#   jobs:                        # is UTC + best-effort; buy frequency, not
+#     sweep:                     # punctuality (docs/github-constraints.md #1)
+#       uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+#       with: { source: github }
+#       secrets: inherit
+#
+# Intended workflow_call inputs (declared during extraction):
+#   source:   github | sakalmaster   default github
+#   project:  SakalMaster project    integrated mode only
+#   app:      SakalMaster app        integrated mode — REQUIRED (claim filter,
+#                                    contract invariant 4)
+# Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
+#                   (org-level; one rotation point)
+# =============================================================================
+name: sweep
+
+on:
+  workflow_call:
+    # inputs/secrets declared during extraction — see header
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not implemented
+        run: |
+          echo "::error::sweep.yml is a stub — extraction from sakalpos-garage is the next session"
+          exit 1

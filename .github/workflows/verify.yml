@@ -1,0 +1,39 @@
+# =============================================================================
+# verify.yml — sakal-verify in CI (INTEGRATED mode only; judges ALL methods)
+# STATUS: STUB — documents intent only. Wired in migration step 4 (the sakal
+# source), per SakalMaster's docs/ci/agent-runs.md.
+#
+# What it will do
+#   The second judge of the GATE in integrated mode (docs/task-contract.md
+#   step 4): after merge, run SakalMaster's citation verifier (sakal-verify)
+#   so AC status is DERIVED from citations resolving against real source
+#   files. The executor's claim that an AC is satisfied has zero direct
+#   effect — agents never verify their own claims (contract invariant 3).
+#   Talks to SakalMaster over REST: token-exchange → PostgREST.
+#
+# How callers will use it (trigger lives in the CALLER repo, never here):
+#   on:
+#     push: { branches: [main] }
+#   jobs:
+#     verify:
+#       uses: sakal-dev/automation/.github/workflows/verify.yml@v1
+#       with: { project: ..., app: ... }
+#       secrets: inherit
+#
+# Intended workflow_call inputs: project, app, SakalMaster base URL
+# Intended secrets: SAKAL_TOKEN (org-level)
+# =============================================================================
+name: verify
+
+on:
+  workflow_call:
+    # inputs/secrets declared when the sakal source is wired — see header
+
+jobs:
+  stub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not implemented
+        run: |
+          echo "::error::verify.yml is a stub — wired when the sakal source lands (migration step 4)"
+          exit 1
