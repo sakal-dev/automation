@@ -44,6 +44,18 @@ docs/
   methods/01…07.md    the experiment lab notebook, one file per method
 ```
 
+## Onboarding, in one sentence
+
+Install the plugin, open the repo in Claude Code (or connect the folder in
+Cowork), and say **"set up agent automation here"** — the `automation-install`
+skill does the rest (<30 min, no hand-written YAML) and prints what it
+changed plus the secrets checklist:
+
+```
+/plugin marketplace add sakal-dev/automation
+/plugin install sakal-automation@sakal-automation
+```
+
 ## How a project consumes this
 
 Three pieces, all installed by the `automation-install` skill (<30 min, no
