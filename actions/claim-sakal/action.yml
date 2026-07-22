@@ -1,0 +1,36 @@
+# =============================================================================
+# claim-sakal — SOURCE step, sakalmaster (integrated) mode
+# STATUS: STUB — documents intent only; wired in migration step 4 per
+# SakalMaster's docs/ci/agent-runs.md.
+#
+# What it will do
+#   Claim one task from the SakalMaster queue over REST:
+#   token-exchange (SAKAL_TOKEN → session JWT) → PostgREST →
+#   claim_next_task(project, app). The claim is an ATOMIC, LEASED, expiring
+#   lock — that atomicity is what makes N concurrent claimants safe (a CI
+#   sweep and a VPS worker on the same app never double-work).
+#   The app filter is NON-OPTIONAL (contract invariant 4): a repo = one
+#   SakalMaster app; the queue lives per project; an unfiltered claim would
+#   grab tasks this repo cannot implement. If the RPC lacks the filter, that
+#   is a SakalMaster change to request, not something to approximate here.
+#   No explicit release input: outcome/block reporting (report-sakal) ends the
+#   lease; a dead run's lease expires on its own.
+#
+# Intended inputs:
+#   project:    SakalMaster project slug   (required)
+#   app:        SakalMaster app slug       (required — the claim filter)
+#   base-url:   SakalMaster instance       (e.g. staging)
+#   token:      SAKAL_TOKEN (org secret)
+# Intended outputs: claimed: 'true'|'false', task-id, run-id
+# =============================================================================
+name: claim-sakal
+description: "STUB — claim_next_task(project, app) via token-exchange + PostgREST"
+
+runs:
+  using: composite
+  steps:
+    - name: Not implemented
+      shell: bash
+      run: |
+        echo "::error::actions/claim-sakal is a stub — wired when the sakal source lands (migration step 4)"
+        exit 1

@@ -1,0 +1,37 @@
+# =============================================================================
+# report-sakal — run reporting into agent_runs (integrated mode)
+# STATUS: STUB — documents intent only; wired in migration step 4 per
+# SakalMaster's docs/ci/agent-runs.md.
+#
+# What it will do
+#   Write the run lifecycle to SakalMaster's agent_runs over REST
+#   (token-exchange → PostgREST), attributed to the claimant's identity
+#   (contract invariant 8):
+#   - kind=heartbeat  "still alive" — keeps the claim lease held so a live
+#                     run is distinguishable from a dead one
+#   - kind=outcome    finished: PR URL + the executor's CLAIMS (citations).
+#                     Claims are input to the verifier, never conclusions —
+#                     agents never verify their own claims (invariant 3)
+#   - kind=block      cannot proceed without a decision: carries the question,
+#                     which surfaces in SakalMaster's Needs-me. Blocking is an
+#                     outcome, not a failure.
+#   The Team · Agents dashboard derives its view from these records at read
+#   time; nothing here writes status directly.
+#
+# Intended inputs:
+#   kind:      heartbeat | outcome | block
+#   run-id:    from claim-sakal
+#   payload:   kind-specific JSON (PR URL + citations / question)
+#   base-url, token: as in claim-sakal
+# =============================================================================
+name: report-sakal
+description: "STUB — heartbeat / outcome / block into SakalMaster agent_runs"
+
+runs:
+  using: composite
+  steps:
+    - name: Not implemented
+      shell: bash
+      run: |
+        echo "::error::actions/report-sakal is a stub — wired when the sakal source lands (migration step 4)"
+        exit 1

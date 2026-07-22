@@ -1,0 +1,34 @@
+# =============================================================================
+# claim-github — SOURCE step, github (standalone) mode
+# STATUS: STUB — documents intent only; implemented during garage extraction.
+#
+# What it will do
+#   Implement the standalone claim semantics from docs/task-contract.md step 1:
+#   - mode=claim    swap the issue's label ready → claimed. Exclusivity comes
+#                   from the calling workflow's concurrency group, not from
+#                   reading label state first.
+#   - mode=release  remove the claim label. The calling workflow MUST invoke
+#                   this from an `if: always()` step so a crashed run can never
+#                   leave a task claimed (contract invariant 5).
+#   All label writes are unconditional and idempotent — label READS can hit
+#   rate limits (docs/github-constraints.md #5), so never read-then-write.
+#   (Two-mode single action because composite actions have no post: hook —
+#   release must be an explicit always() call site in the workflow.)
+#
+# Intended inputs:
+#   mode:      claim | release
+#   issue:     issue number
+#   token:     app token (never the built-in GITHUB_TOKEN)
+# Intended outputs (mode=claim): claimed: 'true' | 'false'
+# =============================================================================
+name: claim-github
+description: "STUB — label claim + mechanical release for the standalone queue"
+
+runs:
+  using: composite
+  steps:
+    - name: Not implemented
+      shell: bash
+      run: |
+        echo "::error::actions/claim-github is a stub — implemented during garage extraction"
+        exit 1

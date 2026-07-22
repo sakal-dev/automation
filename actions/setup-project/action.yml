@@ -1,0 +1,27 @@
+# =============================================================================
+# setup-project — run the repo's own environment setup
+# STATUS: STUB — documents intent only; implemented during garage extraction.
+#
+# What it will do
+#   Execute ./tool/setup.sh in the target repo. That script — owned by the
+#   PROJECT repo, written by the install skill from a per-stack template — is
+#   the ONLY place stack knowledge lives (contract invariant 6: the engine is
+#   stack-blind). This action adds nothing stack-specific: checkout is done by
+#   the calling workflow; this step prepares whatever the repo says it needs
+#   (Flutter, Laravel, Node/React, Electron/pnpm — the repo's business).
+#
+# Intended inputs:
+#   working-directory:  where the target repo is checked out (default '.')
+# Intended outputs: none — it either prepares the environment or fails the run
+# =============================================================================
+name: setup-project
+description: "STUB — runs the repo's ./tool/setup.sh; the engine stays stack-blind"
+
+runs:
+  using: composite
+  steps:
+    - name: Not implemented
+      shell: bash
+      run: |
+        echo "::error::actions/setup-project is a stub — implemented during garage extraction"
+        exit 1
