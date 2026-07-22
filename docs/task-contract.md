@@ -80,8 +80,11 @@ pipeline stops cheaply (an idle poll must cost approximately zero).
   states).
 - **Claiming is done by label swap** (ready → claimed). The swap MUST be
   effectively atomic for the concurrency actually possible in this mode:
-  workflow **concurrency groups** serialize runs so two sweeps cannot claim
-  the same issue.
+  workflow **concurrency groups** serialize the claimants. The groups are
+  per-workflow, not shared: the sweep runs as a repo-wide singleton (two
+  sweeps never overlap), while on-demand serializes **per issue** — parallel
+  across issues, but two near-simultaneous summons on the same issue queue
+  behind each other, which is what closes the check-then-act claim race.
 - **Release is mechanical.** The claim label MUST be removed by an `always()`
   step (or equivalent) that runs on success, failure, and cancellation. A
   crashed run MUST NOT leave a task claimed forever.
@@ -215,8 +218,10 @@ lives:
    gate's environment, not the executor's.
 2. **Merge is opt-in, per issue/task** (`auto-merge` label / flag). The
    default for every task is human review. Docs-only fast paths, where they
-   exist, MUST exclude `CLAUDE.md` — an agent must never be able to weaken
-   its own guardrails via an auto-merged "docs" PR.
+   exist, MUST exclude the **guardrail paths** — `CLAUDE.md`, the repo's
+   rules doc (e.g. `docs/RULES.md`), and `.github/**`, extendable per repo —
+   an agent must never be able to weaken its own guardrails or the gate via
+   an auto-merged "docs" PR.
 3. PRs MUST be opened with the **app token**, not the built-in
    `GITHUB_TOKEN` — token-opened PRs are inert (no CI fires), which would
    silently skip the gate (see `docs/github-constraints.md`).
@@ -248,8 +253,9 @@ one is a regression, not a redesign.
 1. **Gate before PR.** No proposed change is mergeable without
    `./tool/verify.sh` passing in the gate's own environment.
 2. **Merge is opt-in.** Review is the default; auto-merge requires an
-   explicit per-task signal; `CLAUDE.md` is excluded from any docs-only
-   fast path.
+   explicit per-task signal; the guardrail paths (`CLAUDE.md`, the repo's
+   rules doc, `.github/**`, extendable per repo) are excluded from any
+   docs-only fast path.
 3. **Agents never verify their own claims.** The executor reports and cites;
    judgment belongs to the gate (CI standalone; CI + the SakalMaster
    verifier integrated). Nothing an executor writes can set an AC's status.

@@ -13,6 +13,15 @@
 # Intended inputs:
 #   working-directory:  where the target repo is checked out (default '.')
 # Intended outputs: none — it either prepares the environment or fails the run
+#
+# Review finding folded in (garage session, accepted, refined):
+#   4. SETUP-PROJECT OWNS CACHING — losing subosito/flutter-action's cache
+#      would make every run a cold install. Refinement protecting the
+#      stack-blind seam: the engine must not hardcode Flutter paths. Inputs
+#      cache_paths + cache_key_files, defaults covering the common ecosystems
+#      (~/.pub-cache + pub tool dirs · node_modules / pnpm store · vendor/),
+#      keyed on a lockfile glob (pubspec.lock, pnpm-lock.yaml, composer.lock,
+#      …). Stack knowledge stays DATA (inputs/repo), never engine logic.
 # =============================================================================
 name: setup-project
 description: "STUB — runs the repo's ./tool/setup.sh; the engine stays stack-blind"

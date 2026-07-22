@@ -22,6 +22,12 @@
 #
 # Intended workflow_call inputs: project, app, SakalMaster base URL
 # Intended secrets: SAKAL_TOKEN (org-level)
+#
+# Review findings folded in (garage session, accepted):
+#   1. CALLERS MUST DECLARE permissions: — exact block decided when this is
+#      implemented; silent 403s otherwise.
+#   3. Consumes the ci_check_name input (default analyze-and-test), same
+#      named-check design as automerge.yml.
 # =============================================================================
 name: verify
 

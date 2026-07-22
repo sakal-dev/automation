@@ -31,6 +31,18 @@
 #                                    contract invariant 4)
 # Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
 #                   (org-level; one rotation point)
+#
+# Review findings folded in (garage session, accepted):
+#   1. CALLERS MUST DECLARE permissions: — a reusable workflow cannot raise
+#      permissions beyond the caller's grant; missing grants fail as silent
+#      403s. Caller example must show the full block: contents/pull-requests/
+#      issues: write, id-token: write, actions: write (self-redispatch).
+#   2. SELF-REDISPATCH targets the CALLER's filename, not sweep.yml — derived
+#      from ${{ github.workflow_ref }} (the caller's path in a reusable run),
+#      with an input override only as an escape hatch. Verified in parity test.
+#   6. CONCURRENCY at job level INSIDE the engine (callers cannot forget it):
+#      singleton group sweep-${{ github.repository }} — never shared with
+#      on-demand's per-issue group.
 # =============================================================================
 name: sweep
 

@@ -26,6 +26,16 @@
 #
 # Intended workflow_call inputs: merge method, docs-only fast-path toggle
 # Intended secrets: app-token key
+#
+# Review findings folded in (garage session, accepted):
+#   1. CALLERS MUST DECLARE permissions: (contents/pull-requests/issues:
+#      write, checks: read) — missing grants = silent 403s.
+#   3. CI CHECK NAME IS AN INPUT — ci_check_name, default analyze-and-test.
+#      Named-check design DELIBERATELY kept over "all checks green": an
+#      unrelated optional check must not be able to block a merge.
+#   5. GUARDRAIL EXCLUSION IS AN INPUT — guardrail_paths, default CLAUDE.md,
+#      docs/RULES.md, .github/**, extendable per repo; the docs-only fast
+#      path never merges a change to them (contract invariant 2, widened).
 # =============================================================================
 name: automerge
 

@@ -24,6 +24,14 @@
 #
 # Intended workflow_call inputs: source / project / app as in sweep.yml
 # Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
+#
+# Review findings folded in (garage session, accepted):
+#   1. CALLERS MUST DECLARE permissions: (contents/pull-requests/issues:
+#      write, id-token: write, actions: read) — missing grants = silent 403s.
+#   6. CONCURRENCY at job level INSIDE the engine: per-issue group
+#      ondemand-<issue #> — parallel across issues, serialized per issue;
+#      this is what closes the check-then-act claim race between two
+#      near-simultaneous @claude comments. Never one group shared with sweep.
 # =============================================================================
 name: on-demand
 
