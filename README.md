@@ -61,34 +61,33 @@ manual YAML):
 3. **The plugin** — install this repo as a Claude Code plugin marketplace and
    the install/operate/dispatch skills come along.
 
-### Secrets — set up once, grant per repo
+### Secrets — per repo today (Free plan), org-level if we upgrade
 
-Secrets are **org-level** (`CLAUDE_CODE_OAUTH_TOKEN`, `SAKAL_TOKEN`) — one
-value, one rotation point. They were created once and never need re-minting:
+`secrets: inherit` in every caller passes whatever secrets the calling repo
+can see — repo-level or org-level, the engine doesn't care.
 
-```bash
-# One-time (already done): mint a token and store it at org level.
-claude setup-token     # interactive browser login; prints sk-ant-oat01-…
-gh secret set CLAUDE_CODE_OAUTH_TOKEN --org sakal-dev --visibility selected --repos <first-repo>
-```
+**Current layout: repo-level `CLAUDE_CODE_OAUTH_TOKEN` in each consumer
+repo.** The `sakal-dev` org is on the GitHub Free plan, and org secrets are
+not visible to private repos on Free — so the "one org secret" design
+(NOTES.md §4) is parked until/unless the org upgrades to Team. In practice
+this costs nothing at onboarding time:
 
-**Onboarding a new repo does NOT mean setting the secret again.** The value
-stays put; you only add the repo to the secret's read-access list:
+- **New repo:** run `/install-github-app` from Claude Code in that repo — it
+  installs the GitHub App AND creates the repo's `CLAUDE_CODE_OAUTH_TOKEN`
+  secret automatically. No manual secret handling at all.
+- **Manual alternative:** `claude setup-token` (browser login, prints
+  `sk-ant-oat01-…`), then
+  `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R sakal-dev/<repo>`.
+- **Rotation** is per-repo: re-run either of the above in each consumer repo
+  (`gh secret list -R <repo>` to audit which repos carry it).
 
-```bash
-repo_id=$(gh api repos/sakal-dev/<new-repo> --jq .id)
-gh api -X PUT orgs/sakal-dev/actions/secrets/CLAUDE_CODE_OAUTH_TOKEN/repositories/$repo_id
-```
-
-(or UI: Org settings → Secrets and variables → Actions → the secret →
-*Repository access* → tick the repo.)
-
-Deliberately `selected`, not `all`: workflows in agent-worked repos are
-semi-trusted, so each repo is granted read access explicitly. Rules that
-hold everywhere: callers reach secrets via `secrets: inherit`; a repo-level
-secret with the same name overrides the org one (useful for migration —
-delete the repo copy and the org secret takes over); the token value is
-never written down anywhere but the org secret store.
+**If the org ever upgrades to Team:** create the secret once at org level
+with *Selected repositories* visibility (workflows in agent-worked repos are
+semi-trusted — grant read access explicitly, never `all`), grant each
+consumer repo access, then delete the repo-level copies. A repo-level secret
+with the same name overrides the org one, so the migration is zero-downtime:
+the org secret takes over the moment a repo copy is deleted. The token value
+itself is never written down anywhere but the secret store.
 
 ## Background
 
