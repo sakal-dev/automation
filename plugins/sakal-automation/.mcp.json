@@ -1,0 +1,4 @@
+{
+  "_stub": "OPTIONAL sakalmaster MCP config for integrated mode — filled in when the sakal source lands (migration step 4). Standalone installs ignore this file entirely. It will point at the SakalMaster MCP server; authentication comes from the user's environment (sakal PAT) — this file never contains a secret.",
+  "mcpServers": {}
+}

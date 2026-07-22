@@ -1,0 +1,13 @@
+{
+  "name": "sakal-automation",
+  "owner": {
+    "name": "sakal-dev"
+  },
+  "plugins": [
+    {
+      "name": "sakal-automation",
+      "source": "./plugins/sakal-automation",
+      "description": "Agent automation for sakal-dev / Thalias repos: install (onboard a repo in <30 min), operate (queue/unblock/upgrade/diagnose), dispatch (hand briefs to cloud executors). Implements the SOURCE → BRIEF → EXECUTE → GATE contract in docs/task-contract.md."
+    }
+  ]
+}
