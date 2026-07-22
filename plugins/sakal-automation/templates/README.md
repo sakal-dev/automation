@@ -1,5 +1,10 @@
 # templates — what the install skill copies into a repo
 
+> **Manual: [`docs/issues.md`](../../../docs/issues.md)** — the ten issue types,
+> the three distribution paths (incl. the org-wide `sakal-dev/.github` defaults
+> trick), the per-repo label step, and how agents learn the format. Read it
+> before onboarding a repo.
+
 **STATUS: stub — files land with the plugin build (migration step 3), the
 per-stack scripts distilled from real repos (garage first).**
 
