@@ -1,0 +1,142 @@
+/**
+ * sdk-worker — METHOD 5: the Agent SDK worker.
+ *
+ * Same lifecycle as the headless loop (workers/lib/lifecycle.sh via
+ * lifecycle-cli.sh — ONE implementation, no drift), different execution
+ * engine: the Claude Agent SDK as a library. What the library buys over
+ * `claude -p` (and why this is the long-term worker):
+ *   - the hard path denylist enforced as a PreToolUse HOOK — code, not
+ *     prompt text (defence-in-depth ON TOP of the prompt denylist, which
+ *     stays);
+ *   - explicit allowed-tools policy;
+ *   - heartbeats while the agent streams;
+ *   - graceful SIGTERM cancellation via AbortController.
+ *
+ * Runs inside the session-6 sandbox (Node is already in the image). Same env
+ * contract as the loop (env.example) — SOURCE, REPO, POLL_SECONDS, limits.
+ */
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { readFileSync, rmSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const sh = promisify(execFile);
+const LIB = resolve(new URL("../..", import.meta.url).pathname, "lib/lifecycle-cli.sh");
+const WORKDIR = process.env.WORKDIR ?? "/workspace/run";
+const POLL_MS = Number(process.env.POLL_SECONDS ?? 300) * 1000;
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_SECONDS ?? 120) * 1000;
+const MAX_TURNS = Number(process.env.MAX_TURNS ?? 150);
+
+/** The hard path denylist — the same list the engine prompts carry, here as
+ * CODE. Checked against every file-touching tool call and every Bash
+ * command's tokens. Deny = the tool call never executes. */
+const DENYLIST: RegExp[] = [
+  /(^|\/)\.github\//, /(^|\/)tool\//, /\.gradle(\.kts)?$/, /(^|\/)gradle\//,
+  /gradle-wrapper\./, /\.keystore$/, /\.jks$/, /key\.properties$/, /(^|\/)\.env[^/]*$/,
+];
+const denied = (p: string) => DENYLIST.some((rx) => rx.test(p));
+
+async function lifecycle(cmd: string, args: string[] = [], env = {}) {
+  const { stdout } = await sh("bash", [LIB, cmd, ...args], {
+    env: { ...process.env, ...env, WORKDIR },
+  });
+  return stdout.trim() ? JSON.parse(stdout.trim().split("\n").pop()!) : {};
+}
+
+async function runOneTask(): Promise<boolean> {
+  const claim = await lifecycle("claim");
+  if (!claim.claimed) return false;
+  const taskEnv = {
+    TASK_REF: claim.task_ref, RUN_ID: claim.run_id ?? "", STORY_KEY: claim.story_key ?? "",
+  };
+
+  let outcome = "failed";
+  let detail = "terminated before outcome";
+  const abort = new AbortController();
+  const onTerm = () => abort.abort(new Error("SIGTERM"));
+  process.once("SIGTERM", onTerm);
+  process.once("SIGINT", onTerm);
+
+  const hb = setInterval(() => lifecycle("heartbeat", [], taskEnv).catch(() => {}), HEARTBEAT_MS);
+  try {
+    rmSync(WORKDIR, { recursive: true, force: true });
+    mkdirSync(WORKDIR, { recursive: true });
+    const repoDir = join(WORKDIR, "repo");
+    await sh("gh", ["repo", "clone", process.env.REPO!, repoDir, "--", "--depth", "50", "-q"]);
+    const { brief_file } = await lifecycle("brief", [], taskEnv);
+    const brief = readFileSync(brief_file, "utf8");
+
+    for await (const message of query({
+      prompt: brief,
+      options: {
+        cwd: repoDir,
+        maxTurns: MAX_TURNS,
+        abortController: abort,
+        allowedTools: ["Read", "Glob", "Grep", "Edit", "MultiEdit", "Write", "Bash"],
+        permissionMode: "bypassPermissions", // the sandbox + hook are the real walls
+        hooks: {
+          PreToolUse: [{
+            hooks: [async (input: any) => {
+              const t = input.tool_name as string;
+              const ti = (input.tool_input ?? {}) as Record<string, unknown>;
+              const paths: string[] = [];
+              if (typeof ti.file_path === "string") paths.push(ti.file_path);
+              if (t === "Bash" && typeof ti.command === "string")
+                paths.push(...(ti.command.match(/[\w./~-]+/g) ?? []));
+              const hit = paths.find((p) => denied(p.replace(repoDir + "/", "")));
+              if (hit) {
+                return {
+                  decision: "block" as const,
+                  stopReason: `denylist: ${hit} is untouchable (contract invariant 7)`,
+                };
+              }
+              return {};
+            }],
+          }],
+        },
+      },
+    })) {
+      if (message.type === "result") {
+        // the SDK's terminal message; the gate below decides, not the agent
+        console.log(`[agent] result: ${"subtype" in message ? message.subtype : "done"}`);
+      }
+    }
+
+    // GATE — in the worker's environment, never taken from the agent's claims.
+    await sh("bash", ["-c", "./tool/setup.sh >/dev/null 2>&1 && ./tool/verify.sh"], { cwd: repoDir });
+    const { stdout: branch } = await sh("git", ["branch", "--show-current"], { cwd: repoDir });
+    const { stdout: pr } = await sh("gh", [
+      "pr", "list", "-R", process.env.REPO!, "--head", branch.trim(), "--json", "number", "-q", ".[0].number",
+    ]);
+    if (pr.trim()) { outcome = "succeeded"; detail = `${process.env.REPO}#${pr.trim()}`; }
+    else { outcome = "failed"; detail = "gate green but no PR was opened"; }
+  } catch (err: any) {
+    if (abort.signal.aborted) { outcome = "failed"; detail = "cancelled (SIGTERM)"; }
+    else { outcome = "blocked"; detail = `needs a human look: ${err?.message ?? err}`; }
+  } finally {
+    clearInterval(hb);
+    process.removeListener("SIGTERM", onTerm);
+    process.removeListener("SIGINT", onTerm);
+    await lifecycle("finish", [outcome, detail], taskEnv).catch(() => {});
+    rmSync(WORKDIR, { recursive: true, force: true });
+  }
+  console.log(`[worker] task ${claim.task_ref}: ${outcome} (${detail})`);
+  return true;
+}
+
+async function main() {
+  for (const v of ["SOURCE", "REPO"]) {
+    if (!process.env[v]) { console.error(`missing env ${v}`); process.exit(2); }
+  }
+  console.log(`[worker] sdk-worker up — source=${process.env.SOURCE} repo=${process.env.REPO}`);
+  let stopping = false;
+  process.on("SIGTERM", () => { stopping = true; });
+  while (!stopping) {
+    const worked = await runOneTask().catch((e) => { console.error("[worker]", e); return false; });
+    if (!worked && !stopping) await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+  console.log("[worker] stopped gracefully");
+}
+
+main();

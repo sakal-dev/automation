@@ -1,0 +1,20 @@
+{
+  "name": "@sakal/sdk-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Method 5: the Agent SDK worker — same lifecycle as the headless loop, programmatic control (hook-enforced denylist, heartbeats, graceful cancellation).",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
