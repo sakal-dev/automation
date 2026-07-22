@@ -25,6 +25,10 @@ echo "[loop] source=$SOURCE repo=$REPO poll=${POLL_SECONDS}s"
 
 while true; do
   TASK_REF=""; RUN_ID=""; STORY_KEY=""
+  # Fleet cold starts poll in lockstep — jitter de-synchronises the
+  # check-then-act label claim (github mode; observed double-claim at N=2).
+  # The DB lease (sakalmaster mode) needs no jitter; it is exact.
+  [ -n "${CLAIM_JITTER:-}" ] && sleep "$((RANDOM % CLAIM_JITTER))"
   if ! claim; then
     sleep "$POLL_SECONDS"; continue
   fi

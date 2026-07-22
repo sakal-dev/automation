@@ -1,0 +1,38 @@
+# METHOD 7 — the fleet: N workers against one queue. `docker compose up
+# --scale worker=N`. The safety argument (docs/methods/07-orchestrators.md):
+# github mode's label claim is check-then-act — a small self-healing race,
+# honest for N<=2; sakalmaster mode's DB lease is exact — N safe by
+# construction. Real fleets should run integrated.
+#
+# PER-REPLICA IDENTITY: pass a DISTINCT token per replica (one agent account
+# or PAT each) so Team · Agents attribution never blurs. Compose can't hand
+# out per-replica env from one file cleanly — run one service per identity
+# (worker-a / worker-b below) rather than --scale with a shared token.
+#
+# Env: /etc/sakal-worker.env (same contract as the systemd unit), plus
+# per-replica overrides inline. Swap the command to the sdk-worker for
+# method 5 replicas — the lifecycle is identical.
+
+x-worker: &worker
+  image: sakal-sandbox:latest
+  cap_add: [NET_ADMIN]
+  env_file: /etc/sakal-worker.env
+  volumes:
+    - /opt/sakal-automation/workers:/opt/workers:ro
+  command: bash /opt/workers/headless-loop/loop.sh
+  restart: unless-stopped
+
+services:
+  worker-a:
+    <<: *worker
+    container_name: sakal-worker-a
+    environment:
+      WORKER_NAME: worker-a
+      # SAKAL_TOKEN / GH_TOKEN overridden per replica for attribution:
+      # SAKAL_TOKEN: ${SAKAL_TOKEN_A}
+  worker-b:
+    <<: *worker
+    container_name: sakal-worker-b
+    environment:
+      WORKER_NAME: worker-b
+      # SAKAL_TOKEN: ${SAKAL_TOKEN_B}

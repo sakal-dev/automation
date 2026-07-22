@@ -93,8 +93,19 @@ finish() {
         gh issue comment "$TASK_REF" -R "$REPO" --body "Blocked: $detail" >/dev/null 2>&1 || true
         gh issue edit "$TASK_REF" -R "$REPO" --add-label claude-blocked >/dev/null 2>&1 || true ;;
     esac
-    # the label release — unconditional, idempotent, every path
-    [ -n "${TASK_REF:-}" ] && gh issue edit "$TASK_REF" -R "$REPO" --remove-label claude-working >/dev/null 2>&1 || true
+    # the label release — unconditional, idempotent, every path, WITH RETRY:
+    # concurrent mutations from one token (e.g. two replicas stopped in
+    # parallel) can hit GitHub's secondary rate limit and silently fail —
+    # observed in the 2-replica fleet experiment (2026-07-22). Per-replica
+    # tokens avoid the collision; the retry covers whatever remains.
+    if [ -n "${TASK_REF:-}" ]; then
+      for backoff in 0 3 8 20; do
+        sleep "$backoff"
+        if gh issue edit "$TASK_REF" -R "$REPO" --remove-label claude-working >/dev/null 2>&1; then break; fi
+        # already-absent label also lands here on some gh versions — verify:
+        gh issue view "$TASK_REF" -R "$REPO" --json labels -q '.labels[].name' 2>/dev/null | grep -qx claude-working || break
+      done
+    fi
   else
     [ -z "${RUN_ID:-}" ] && return 0
     case "$outcome" in
