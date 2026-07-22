@@ -1,49 +1,190 @@
 # =============================================================================
-# on-demand.yml — the @claude path (serves METHOD 3: claude-code-action)
-# STATUS: STUB — documents intent only. Extracted from sakalpos-garage next
-# session.
+# on-demand.yml — the @claude path (METHOD 3: claude-code-action)
+# Extracted from sakalpos-garage's claude.yml; behaviour-identical except the
+# in-run gate, which is now the repo's own ./tool/verify.sh (stack-blind).
+# Contract: docs/task-contract.md — this is the push half of method 3;
+# sweep.yml is the pull half.
 #
-# What it will do
-#   Handle a human summoning the agent onto a specific issue/PR by mentioning
-#   @claude in a comment. Guard first: comment triggers fire on EVERY comment
-#   (docs/github-constraints.md #6), so the no-op path must decide and exit in
-#   ~1s. When triggered for real: claim the issue (same label semantics as
-#   sweep), brief from the issue + the summoning comment, execute, run the
-#   in-run gate (./tool/verify.sh) BEFORE opening the PR with the app token,
-#   release the claim in an always() step.
-#   This is the push half of method 3; sweep.yml is the pull half.
+# What it does: a human summons the agent by mentioning @claude (comment,
+# review, or issue body/title). The engine claims the issue MECHANICALLY with
+# claude-working (a prompt instruction alone proved unreliable), stands down
+# if another run owns it, prepares the environment via ./tool/setup.sh, picks
+# the model from the issue's labels (opus/sonnet/fable; default from the
+# model input), runs the agent with the verify-before-PR system prompt, and
+# releases the claim in an always() step — only if THIS run claimed it, so a
+# stand-down never strips another run's label.
 #
-# How callers will use it (trigger lives in the CALLER repo, never here):
+# How a repo calls it. The caller carries the triggers AND the cheap outer
+# guard (comment triggers fire on every comment — the guard must decide in
+# ~1s, before this engine is even invoked). Callers MUST declare permissions;
+# missing grants fail as silent 403s:
+#
+#   name: Claude Code
 #   on:
 #     issue_comment: { types: [created] }
+#     pull_request_review_comment: { types: [created] }
+#     issues: { types: [opened, assigned] }
+#     pull_request_review: { types: [submitted] }
+#   permissions:
+#     contents: write        # branches + pushes
+#     pull-requests: write   # open PRs
+#     issues: write          # claude-working / claude-blocked labels
+#     id-token: write        # claude-code-action OIDC
+#     actions: read          # read CI results on PRs
 #   jobs:
-#     on-demand:
-#       if: contains(github.event.comment.body, '@claude')   # cheap outer guard
+#     claude:
+#       if: |
+#         (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+#         (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+#         (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+#         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
 #       uses: sakal-dev/automation/.github/workflows/on-demand.yml@v1
 #       secrets: inherit
 #
-# Intended workflow_call inputs: source / project / app as in sweep.yml
-# Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
-#
-# Review findings folded in (garage session, accepted):
-#   1. CALLERS MUST DECLARE permissions: (contents/pull-requests/issues:
-#      write, id-token: write, actions: read) — missing grants = silent 403s.
-#   6. CONCURRENCY at job level INSIDE the engine: per-issue group
-#      ondemand-<issue #> — parallel across issues, serialized per issue;
-#      this is what closes the check-then-act claim race between two
-#      near-simultaneous @claude comments. Never one group shared with sweep.
+# Concurrency is per-issue INSIDE the engine (ondemand-<issue #>): parallel
+# across issues, serialized per issue — the second of two near-simultaneous
+# @claude comments queues, then sees claude-working and stands down. This is
+# what closes the check-then-act claim race. Never shared with sweep's group.
 # =============================================================================
 name: on-demand
 
 on:
   workflow_call:
-    # inputs/secrets declared during extraction — see header
+    inputs:
+      model:
+        description: Default model when the issue carries no opus/sonnet/fable label
+        type: string
+        default: claude-opus-4-8
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
+    # Secrets via `secrets: inherit` from the caller (org-level):
+    #   CLAUDE_CODE_OAUTH_TOKEN — the Claude Code subscription token
 
 jobs:
-  stub:
-    runs-on: ubuntu-latest
+  claude:
+    # Defense-in-depth re-check of the caller's guard (costs nothing when the
+    # caller filtered correctly; stands the engine down if a caller forgot).
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: ondemand-${{ github.event.issue.number || github.run_id }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
     steps:
-      - name: Not implemented
+      # Claim the issue with claude-working MECHANICALLY — guaranteed, unlike
+      # a prompt instruction. Only for real issues (not PRs). If the label is
+      # already present, another run owns it: the work steps below are skipped
+      # (stand-down), and the release step will not touch the label.
+      - name: Claim issue (claude-working)
+        id: claim
+        if: ${{ github.event.issue.number && !github.event.issue.pull_request }}
+        uses: sakal-dev/automation/actions/claim-github@v1
+        with:
+          mode: claim
+          issue: ${{ github.event.issue.number }}
+          token: ${{ github.token }}
+
+      - name: Checkout repository
+        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Toolchain via the repo's own ./tool/setup.sh (cache + run) so any PR
+      # this run opens can be verified in-run. A PR opened with this run's
+      # token does NOT trigger CI (loop prevention), so without this an
+      # @claude PR could carry no verification at all.
+      - name: Set up project (./tool/setup.sh)
+        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        uses: sakal-dev/automation/actions/setup-project@v1
+
+      # Model from the issue's labels: `opus` / `sonnet` / `fable`; with none,
+      # the model input's default applies. (Availability depends on the
+      # CLAUDE_CODE_OAUTH_TOKEN subscription plan.)
+      - name: Pick model from labels
+        id: model
+        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          DEFAULT_MODEL: ${{ inputs.model }}
         run: |
-          echo "::error::on-demand.yml is a stub — extraction from sakalpos-garage is the next session"
-          exit 1
+          set -euo pipefail
+          model="$DEFAULT_MODEL"
+          if [ -n "${N:-}" ]; then
+            labels="$(gh issue view "$N" -R "$REPO" --json labels -q '.labels[].name' 2>/dev/null || true)"
+            if   grep -qx opus   <<<"$labels"; then model="claude-opus-4-8"
+            elif grep -qx sonnet <<<"$labels"; then model="claude-sonnet-5"
+            elif grep -qx fable  <<<"$labels"; then model="claude-fable-5"
+            fi
+          fi
+          echo "name=$model" >> "$GITHUB_OUTPUT"
+          echo "::notice::Model for #${N:-?}: $model"
+
+      - name: Run Claude Code
+        id: claude
+        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Read CI results on PRs.
+          additional_permissions: |
+            actions: read
+
+          # --allowedTools grants the Bash the in-run gate needs — a headless
+          # run has no one to approve them, so without this ./tool/verify.sh
+          # would be denied. The claude-working label is handled mechanically
+          # (above/below), not in the prompt.
+          claude_args: >-
+            --model ${{ steps.model.outputs.name }}
+            --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"
+            --append-system-prompt "Follow this repo's rules (CLAUDE.md and the
+            rules doc it imports). Before opening any pull request you MUST run
+            ./tool/verify.sh from the repo root and it MUST exit 0 — it is the
+            repo's own definition of checks-pass, the same gate CI runs; open
+            the PR only if it passes, with a body starting 'Closes #<n>'.
+            Actually create the PR yourself with 'gh pr create' — do NOT just
+            leave a compare link; a PR you open triggers CI and auto-merge, a
+            link does not. If the gate fails, do not open a PR — fix it or
+            report it in a comment. Do NOT merge the PR yourself — a separate
+            auto-merge workflow merges it once CI is green IF the issue is
+            labelled auto-merge; otherwise it stays open for human review.
+            Never hand-close an issue you are opening a PR for — the PR closes
+            it on merge. Only close an issue directly (with a file:line
+            evidence comment) when every AC is already built AND you are
+            opening NO PR at all (any status ledger already correct); if the
+            ledger is merely stale, open a docs PR that says 'Closes #<n>'
+            instead of closing by hand. If the change must be escalated per
+            the rules (auth, payments/money, secrets, CI credentials, or the
+            path denylist), do not open a PR — comment and add claude-blocked
+            instead."
+
+      # NOTE: there is deliberately no mechanical "open a PR" fallback here.
+      # A PR opened by this workflow's GITHUB_TOKEN is second-class — GitHub
+      # won't trigger CI / auto-merge / claude-done on it (loop-prevention) and
+      # gates its checks behind "Approve and run". So the agent opens the PR
+      # itself (its app token → a live PR); if it doesn't, its comment leaves a
+      # "Create PR" link you click, which also gives a live PR.
+
+      # Always release the marker — even on failure or cancellation — but only
+      # if THIS run claimed it (a stand-down doesn't strip another run's label).
+      - name: Release issue (claude-working)
+        if: ${{ always() && steps.claim.outputs.claimed == 'true' }}
+        uses: sakal-dev/automation/actions/claim-github@v1
+        with:
+          mode: release
+          issue: ${{ github.event.issue.number }}
+          token: ${{ github.token }}

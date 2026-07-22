@@ -1,44 +1,93 @@
 # =============================================================================
-# claude-done.yml — mechanical label transitions (serves METHOD 3)
-# STATUS: STUB — documents intent only. Extracted from sakalpos-garage next
-# session.
+# claude-done.yml — mechanical label transitions (METHOD 3 engine)
+# Extracted from sakalpos-garage's claude-done.yml; behaviour-identical.
+# Contract: docs/task-contract.md step 4, github mode — state moves because an
+# EVENT happened (a PR opened), never because an agent asserted it.
 #
-# What it will do
-#   Move task state because an EVENT happened, never because an agent asserted
-#   it (docs/task-contract.md, gate: github mode). On PR merged → mark the
-#   linked issue done and close it; on PR closed unmerged → return the issue
-#   to the queue. Rules that shaped it:
-#   - Parse the linked issue from the PR BODY — the `Closes #n` API linkage
-#     lags (docs/github-constraints.md #4).
-#   - Label swaps are unconditional and idempotent — label reads can hit rate
-#     limits, so never read-then-write (docs/github-constraints.md #5).
+# When a PR that `Closes #<n>` opens, move its linked issue
+# claude-ready → claude-done ("worked, ready for review") and clear BOTH
+# in-progress markers. Fires on the PR event, so it works for EVERY PR
+# regardless of who opened it (on-demand @claude, the sweep, or a human).
+# Merging lives in automerge.yml.
 #
-# How callers will use it (trigger lives in the CALLER repo, never here):
+# Hardening carried over:
+#   - Linked issues parsed from the PR BODY (the GraphQL
+#     closingIssuesReferences field LAGS a freshly-opened PR — constraints #4).
+#   - Label edits are unconditional + idempotent, no read-then-write
+#     (constraints #5); each edit independent so an absent label can't abort
+#     the others.
+#   - claude-working cleared at PR-open, which is what stops it sticking on an
+#     issue whose PR merges + closes before the sweep's end-of-run cleanup
+#     (which only scans open issues) can catch it.
+#
+# How a repo calls it (callers MUST declare permissions — silent 403s
+# otherwise):
+#
+#   name: Label review-ready
 #   on:
-#     pull_request: { types: [closed] }
+#     pull_request:
+#       types: [opened, reopened, ready_for_review]
+#   permissions:
+#     contents: read
+#     issues: write          # swap claude-ready → claude-done
+#     pull-requests: read    # read the PR body / linked issues
 #   jobs:
-#     done:
+#     label:
 #       uses: sakal-dev/automation/.github/workflows/claude-done.yml@v1
 #       secrets: inherit
-#
-# Intended secrets: app-token key
-#
-# Review findings folded in (garage session, accepted):
-#   1. CALLERS MUST DECLARE permissions: (issues: write, pull-requests: read)
-#      — missing grants = silent 403s.
-#   6. Job-level concurrency inside the engine, keyed per PR.
 # =============================================================================
 name: claude-done
 
 on:
   workflow_call:
-    # inputs/secrets declared during extraction — see header
+    inputs:
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
 
 jobs:
-  stub:
-    runs-on: ubuntu-latest
+  label:
+    runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: claude-done-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
     steps:
-      - name: Not implemented
+      - name: Move linked issues claude-ready → claude-done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          echo "::error::claude-done.yml is a stub — extraction from sakalpos-garage is the next session"
-          exit 1
+          set -euo pipefail
+
+          # Ensure the label exists (idempotent).
+          gh label create claude-done -R "$REPO" --color 0E8A16 \
+            --description "Worked by Claude; PR open, ready for review" 2>/dev/null || true
+
+          # Linked issues — parse the closing keyword from the PR BODY
+          # (immediate); fall back to the lagging API field only if the body
+          # carries no closing keyword.
+          body="$(gh pr view "$PR" -R "$REPO" --json body -q .body 2>/dev/null || true)"
+          linked="$(printf '%s\n' "$body" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+            | grep -oE '[0-9]+' | sort -u || true)"
+          if [ -z "$linked" ]; then
+            linked="$(gh pr view "$PR" -R "$REPO" --json closingIssuesReferences \
+                        -q '.closingIssuesReferences[].number' 2>/dev/null || true)"
+          fi
+          if [ -z "$linked" ]; then echo "PR #$PR closes no issue — nothing to label."; exit 0; fi
+
+          # A PR is open → the issue is worked and IN REVIEW, no longer queued
+          # or being worked. Add claude-done, drop claude-ready AND
+          # claude-working. Each edit independent + idempotent.
+          for iss in $linked; do
+            gh issue edit "$iss" -R "$REPO" --add-label claude-done >/dev/null 2>&1 || true
+            gh issue edit "$iss" -R "$REPO" --remove-label claude-ready >/dev/null 2>&1 || true
+            gh issue edit "$iss" -R "$REPO" --remove-label claude-working >/dev/null 2>&1 || true
+            echo "#$iss → claude-done (PR #$PR open; cleared claude-ready + claude-working)"
+          done

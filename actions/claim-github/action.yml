@@ -1,34 +1,110 @@
 # =============================================================================
 # claim-github — SOURCE step, github (standalone) mode
-# STATUS: STUB — documents intent only; implemented during garage extraction.
+# Extracted from sakalpos-garage's mechanical claim/release steps (claude.yml)
+# and end-of-sweep cleanup (claude-daily-sweep.yml). Contract step 1:
+# exclusive, releasable claim; mechanical release on every exit path
+# (invariant 5).
 #
-# What it will do
-#   Implement the standalone claim semantics from docs/task-contract.md step 1:
-#   - mode=claim    swap the issue's label ready → claimed. Exclusivity comes
-#                   from the calling workflow's concurrency group, not from
-#                   reading label state first.
-#   - mode=release  remove the claim label. The calling workflow MUST invoke
-#                   this from an `if: always()` step so a crashed run can never
-#                   leave a task claimed (contract invariant 5).
-#   All label writes are unconditional and idempotent — label READS can hit
-#   rate limits (docs/github-constraints.md #5), so never read-then-write.
-#   (Two-mode single action because composite actions have no post: hook —
-#   release must be an explicit always() call site in the workflow.)
+# Three modes:
+#   claim        add the claim label to one issue. If it is already present,
+#                another run owns it: outputs already-owned=true and the
+#                caller's work steps stand down. Exclusivity comes from the
+#                calling workflow's concurrency group (sweep: repo singleton;
+#                on-demand: per-issue) — the check-then-act here is safe only
+#                inside those groups.
+#   release      remove the claim label from one issue. Call from an
+#                `if: always() && <this run claimed it>` step so a crashed run
+#                can never leave its task claimed — and a stand-down never
+#                strips another run's label.
+#   release-all  remove the claim label from ALL issues still carrying it
+#                (--state all: catches issues closed mid-run by a merged PR).
+#                The sweep's end-of-run cleanup; safe because the sweep group
+#                is a singleton, and an on-demand run genuinely mid-flight
+#                re-asserts its claim.
 #
-# Intended inputs:
-#   mode:      claim | release
-#   issue:     issue number
-#   token:     app token (never the built-in GITHUB_TOKEN)
-# Intended outputs (mode=claim): claimed: 'true' | 'false'
+# All label writes are unconditional + idempotent — label READS can hit rate
+# limits (docs/github-constraints.md #5), so nothing here read-then-writes on
+# the release paths. (Composite actions have no post: hook, which is why
+# release is an explicit always() call site in the workflow.)
 # =============================================================================
 name: claim-github
-description: "STUB — label claim + mechanical release for the standalone queue"
+description: "Label claim + mechanical release for the standalone queue (claude-working)"
+
+inputs:
+  mode:
+    description: "claim | release | release-all"
+    required: true
+  issue:
+    description: Issue number (required for claim and release)
+    required: false
+    default: ""
+  label:
+    description: The claim label
+    required: false
+    default: claude-working
+  token:
+    description: Token with issues:write on the caller repo
+    required: true
+
+outputs:
+  claimed:
+    description: "'true' if this call added the claim label (mode=claim)"
+    value: ${{ steps.claim.outputs.claimed }}
+  already-owned:
+    description: "'true' if the label was already present, i.e. another run owns the issue (mode=claim)"
+    value: ${{ steps.claim.outputs.already-owned }}
 
 runs:
   using: composite
   steps:
-    - name: Not implemented
+    - name: Claim
+      id: claim
+      if: ${{ inputs.mode == 'claim' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        N: ${{ inputs.issue }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        set -euo pipefail
+        if [ -z "$N" ]; then echo "::error::claim-github mode=claim requires an issue number"; exit 1; fi
+        if gh issue view "$N" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name' | grep -qx "$LABEL"; then
+          echo "already-owned=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::#$N already has $LABEL — another run owns it; standing down."
+        else
+          gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --add-label "$LABEL"
+          echo "claimed=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Claimed #$N with $LABEL."
+        fi
+
+    - name: Release
+      if: ${{ inputs.mode == 'release' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        N: ${{ inputs.issue }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        if [ -z "$N" ]; then echo "::error::claim-github mode=release requires an issue number"; exit 1; fi
+        gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" || true
+
+    - name: Release all
+      if: ${{ inputs.mode == 'release-all' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        set -uo pipefail
+        for n in $(gh issue list -R "$GITHUB_REPOSITORY" --state all --label "$LABEL" \
+                     --json number -q '.[].number' 2>/dev/null || true); do
+          gh issue edit "$n" -R "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 \
+            && echo "Released stuck $LABEL on #$n." || true
+        done
+
+    - name: Invalid mode
+      if: ${{ inputs.mode != 'claim' && inputs.mode != 'release' && inputs.mode != 'release-all' }}
       shell: bash
       run: |
-        echo "::error::actions/claim-github is a stub — implemented during garage extraction"
+        echo "::error::claim-github: unknown mode '${{ inputs.mode }}' (expected claim | release | release-all)"
         exit 1

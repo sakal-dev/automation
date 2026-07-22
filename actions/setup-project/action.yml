@@ -1,36 +1,86 @@
 # =============================================================================
-# setup-project — run the repo's own environment setup
-# STATUS: STUB — documents intent only; implemented during garage extraction.
+# setup-project — cache + run the repo's own ./tool/setup.sh
+# The stack-blind seam of the engine (contract invariant 6): this action knows
+# HOW to cache and WHEN to run setup, never WHAT the stack is. The repo's
+# tool/setup.sh — written by the install skill from a per-stack template — is
+# the only place stack knowledge lives.
 #
-# What it will do
-#   Execute ./tool/setup.sh in the target repo. That script — owned by the
-#   PROJECT repo, written by the install skill from a per-stack template — is
-#   the ONLY place stack knowledge lives (contract invariant 6: the engine is
-#   stack-blind). This action adds nothing stack-specific: checkout is done by
-#   the calling workflow; this step prepares whatever the repo says it needs
-#   (Flutter, Laravel, Node/React, Electron/pnpm — the repo's business).
-#
-# Intended inputs:
-#   working-directory:  where the target repo is checked out (default '.')
-# Intended outputs: none — it either prepares the environment or fails the run
-#
-# Review finding folded in (garage session, accepted, refined):
-#   4. SETUP-PROJECT OWNS CACHING — losing subosito/flutter-action's cache
-#      would make every run a cold install. Refinement protecting the
-#      stack-blind seam: the engine must not hardcode Flutter paths. Inputs
-#      cache_paths + cache_key_files, defaults covering the common ecosystems
-#      (~/.pub-cache + pub tool dirs · node_modules / pnpm store · vendor/),
-#      keyed on a lockfile glob (pubspec.lock, pnpm-lock.yaml, composer.lock,
-#      …). Stack knowledge stays DATA (inputs/repo), never engine logic.
+# Caching replaces what stack-specific actions (e.g. subosito/flutter-action)
+# provided, so runs don't become cold installs. Stack knowledge stays DATA:
+# cache_paths / cache_key_files are inputs whose defaults cover the common
+# ecosystems (pinned SDK dir + pub cache · pnpm store / node_modules ·
+# composer vendor/), keyed on whichever lockfiles the repo actually has.
+# Missing paths are harmless (the cache step warns and saves the rest), so
+# one cross-stack default list serves every repo; override per repo if needed.
 # =============================================================================
 name: setup-project
-description: "STUB — runs the repo's ./tool/setup.sh; the engine stays stack-blind"
+description: "Restore the toolchain cache, then run the repo's ./tool/setup.sh (stack-blind)"
+
+inputs:
+  working-directory:
+    description: Where the target repo is checked out
+    required: false
+    default: "."
+  cache_paths:
+    description: Newline-separated paths to cache across runs
+    required: false
+    default: |
+      ~/flutter
+      ~/.pub-cache
+      ~/.local/share/pnpm/store
+      node_modules
+      vendor
+  cache_key_files:
+    description: Space-separated lockfile globs that key the cache
+    required: false
+    default: "pubspec.lock pnpm-lock.yaml package-lock.json yarn.lock composer.lock"
+  token:
+    description: Token exported as GH_TOKEN while setup.sh runs (some setups read private registries/repos)
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
-    - name: Not implemented
+    # hashFiles() can't take a dynamic pattern list, so compute the key here:
+    # hash the contents of every matching lockfile, in stable order.
+    - name: Compute cache key
+      id: key
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        KEY_FILES: ${{ inputs.cache_key_files }}
       run: |
-        echo "::error::actions/setup-project is a stub — implemented during garage extraction"
-        exit 1
+        set -euo pipefail
+        shopt -s nullglob globstar
+        files=$(for pat in $KEY_FILES; do ls -1 $pat 2>/dev/null || true; done | sort -u)
+        if [ -n "$files" ]; then
+          hash=$(cat $files | shasum -a 256 | cut -c1-16)
+        else
+          hash="no-lockfiles"
+        fi
+        echo "hash=$hash" >> "$GITHUB_OUTPUT"
+        echo "::notice::setup-project cache key: setup-${{ runner.os }}-$hash"
+
+    - name: Restore toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ inputs.cache_paths }}
+        key: setup-${{ runner.os }}-${{ steps.key.outputs.hash }}
+        # A stale toolchain beats a cold install; setup.sh is idempotent and
+        # re-pins/re-fetches whatever the restored state got wrong.
+        restore-keys: |
+          setup-${{ runner.os }}-
+
+    - name: Run ./tool/setup.sh
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        if [ ! -x tool/setup.sh ] && [ ! -f tool/setup.sh ]; then
+          echo "::error::tool/setup.sh not found — every repo consuming the automation engine must own its setup script (see docs/task-contract.md, EXECUTE)."
+          exit 1
+        fi
+        bash tool/setup.sh

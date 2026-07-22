@@ -1,60 +1,259 @@
 # =============================================================================
-# sweep.yml — scheduled queue drain (serves METHOD 3: claude-code-action)
-# STATUS: STUB — documents intent only. Implementation arrives in the garage
-# extraction session, parity-tested against sakalpos-garage's inline sweep.
+# sweep.yml — scheduled queue drain (METHOD 3: claude-code-action)
+# Extracted from sakalpos-garage's claude-daily-sweep.yml; behaviour-identical
+# except the merge gate, which is now the repo's own ./tool/setup.sh +
+# ./tool/verify.sh (the stack-blind change — no Flutter, no Laravel, no stack
+# anything in this engine). Contract: docs/task-contract.md (SOURCE + BRIEF +
+# EXECUTE + GATE, github mode; sakalmaster mode arrives with verify.yml).
 #
-# What it will do
-#   One run = drain one task: check the source for eligible work (idle runs
-#   must be ~free), claim exactly one task, assemble the brief, run the agent,
-#   run the in-run gate (./tool/verify.sh) BEFORE opening a PR with the app
-#   token, and release the claim mechanically in an always() step.
-#   Dual-source per docs/task-contract.md:
-#     source=github       eligible = "ready"-labelled issues; claim = label swap,
-#                         serialized by a concurrency group
-#     source=sakalmaster  claim_next_task(project, app) via the claim-sakal
-#                         action — atomic lease, ALWAYS filtered by app
+# One run = drain the queue: cheap check-for-work gate (an idle run costs
+# ~seconds), then one claude-code-action invocation working up to max_issues
+# issues — claim via claude-working (in-prompt: the sweep selects issues
+# dynamically), VERIFY-FIRST, gate BEFORE any PR, self-redispatch while
+# actionable work remains — then the guaranteed always() release of stuck
+# claude-working labels. The sweep does NOT merge: automerge.yml does, and
+# only for tasks opted in with the auto-merge label.
 #
-# How callers will use it (trigger lives in the CALLER repo, never here):
+# How a repo calls it (cron lives in the CALLER — a workflow_call cannot carry
+# schedule:). Callers MUST declare the full permissions block; a reusable
+# workflow cannot raise permissions beyond the caller's grant, and a missing
+# grant fails as a silent 403:
+#
+#   name: Claude daily task sweep
 #   on:
 #     schedule:
-#       - cron: '17 */2 * * *'   # off-peak minute, never :00/:30 — GitHub cron
-#   jobs:                        # is UTC + best-effort; buy frequency, not
-#     sweep:                     # punctuality (docs/github-constraints.md #1)
+#       - cron: "0 15,21 * * *"     # off-peak minutes, never :00/:30
+#     workflow_dispatch:            # required: self-redispatch targets THIS file
+#   permissions:
+#     contents: write        # branches + pushes
+#     pull-requests: write   # open PRs
+#     issues: write          # claude-working / claude-blocked labels
+#     id-token: write        # claude-code-action OIDC
+#     actions: write         # self-redispatch (gh workflow run)
+#   jobs:
+#     sweep:
 #       uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
-#       with: { source: github }
 #       secrets: inherit
 #
-# Intended workflow_call inputs (declared during extraction):
-#   source:   github | sakalmaster   default github
-#   project:  SakalMaster project    integrated mode only
-#   app:      SakalMaster app        integrated mode — REQUIRED (claim filter,
-#                                    contract invariant 4)
-# Intended secrets: CLAUDE_CODE_OAUTH_TOKEN, SAKAL_TOKEN, app-token key
-#                   (org-level; one rotation point)
-#
-# Review findings folded in (garage session, accepted):
-#   1. CALLERS MUST DECLARE permissions: — a reusable workflow cannot raise
-#      permissions beyond the caller's grant; missing grants fail as silent
-#      403s. Caller example must show the full block: contents/pull-requests/
-#      issues: write, id-token: write, actions: write (self-redispatch).
-#   2. SELF-REDISPATCH targets the CALLER's filename, not sweep.yml — derived
-#      from ${{ github.workflow_ref }} (the caller's path in a reusable run),
-#      with an input override only as an escape hatch. Verified in parity test.
-#   6. CONCURRENCY at job level INSIDE the engine (callers cannot forget it):
-#      singleton group sweep-${{ github.repository }} — never shared with
-#      on-demand's per-issue group.
+# Self-redispatch targets the CALLER's filename, derived from
+# github.workflow_ref (in a reusable run this is the caller's workflow path) —
+# nothing to configure; dispatch_workflow is an escape-hatch override only.
+# Concurrency is a job-level singleton INSIDE the engine (sweep-<repo>) so a
+# caller cannot forget it; on-demand.yml uses a distinct per-issue group.
 # =============================================================================
 name: sweep
 
 on:
   workflow_call:
-    # inputs/secrets declared during extraction — see header
+    inputs:
+      model:
+        description: Model for the whole sweep (one invocation covers all issues, so per-issue model labels cannot apply here)
+        type: string
+        default: claude-opus-4-8
+      max_issues:
+        description: Maximum issues one sweep run may process
+        type: number
+        default: 5
+      extra_denylist_paths:
+        description: "Repo-specific additions to the hard path denylist (comma-separated globs; the base list is structural and cannot be removed)"
+        type: string
+        default: ""
+      extra_instructions:
+        description: "Repo-specific instructions appended to the sweep prompt (e.g. garage's docs/specs ledger update). Keep short; the repo's CLAUDE.md is the primary home for repo rules."
+        type: string
+        default: ""
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
+      dispatch_workflow:
+        description: "Escape hatch: caller workflow filename for self-redispatch. Default derives it from github.workflow_ref."
+        type: string
+        default: ""
+    # Secrets via `secrets: inherit` from the caller (org-level):
+    #   CLAUDE_CODE_OAUTH_TOKEN — the Claude Code subscription token
 
 jobs:
-  stub:
-    runs-on: ubuntu-latest
+  sweep:
+    runs-on: ${{ inputs.runner }}
+    # Never overlap two sweeps on the same repo — this singleton group is what
+    # makes the label-swap claim safe (contract step 1, github mode). Defined
+    # here, not in callers, so it cannot be forgotten. Distinct from
+    # on-demand's per-issue group — never share one group across workflows.
+    concurrency:
+      group: sweep-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: write
     steps:
-      - name: Not implemented
+      # Cheap gate (no checkout, just the API): is there any actionable
+      # claude-ready issue (not blocked, not being worked)? If not, every
+      # heavy step below is skipped, so an idle scheduled run costs ~seconds.
+      - name: Check for work
+        id: work
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "::error::sweep.yml is a stub — extraction from sakalpos-garage is the next session"
-          exit 1
+          n=$(gh issue list --repo "$REPO" --state open --label claude-ready --json labels \
+            --jq '[.[] | {l:[.labels[].name]} | select((.l | index("claude-blocked")) or (.l | index("claude-working")) | not)] | length')
+          echo "count=${n:-0}"
+          if [ "${n:-0}" -gt 0 ]; then
+            echo "has=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No actionable claude-ready issues — skipping the sweep."
+          fi
+
+      # The file self-redispatch must target: the CALLER's workflow (the
+      # trigger-bearing file in the consumer repo), never this engine file.
+      # github.workflow_ref in a reusable run is the caller's path, e.g.
+      # "org/repo/.github/workflows/claude-daily-sweep.yml@refs/heads/main".
+      - name: Derive self-redispatch target
+        id: dispatch
+        if: ${{ steps.work.outputs.has == 'true' }}
+        env:
+          OVERRIDE: ${{ inputs.dispatch_workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$OVERRIDE" ]; then
+            file="$OVERRIDE"
+          else
+            file="${WORKFLOW_REF%@*}"   # strip @refs/...
+            file="${file##*/}"          # basename
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "::notice::Self-redispatch target: $file"
+
+      - name: Checkout repository
+        if: ${{ steps.work.outputs.has == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Environment comes from the repo's own ./tool/setup.sh (cache + run),
+      # NOT from a stack-specific action — the engine never knows or cares
+      # what stack the repo is. Cache paths/keys are data with cross-stack
+      # defaults; override per repo if needed.
+      - name: Set up project (./tool/setup.sh)
+        if: ${{ steps.work.outputs.has == 'true' }}
+        uses: sakal-dev/automation/actions/setup-project@v1
+
+      - name: Run Claude sweep
+        if: ${{ steps.work.outputs.has == 'true' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          # --model: one action invocation covers the whole run, so the model
+          # is fixed for the batch (per-issue opus/sonnet/fable labels apply
+          # only to the on-demand path). --allowedTools grants the Bash the
+          # gate needs — a headless run can't approve tools interactively.
+          claude_args: '--max-turns 150 --model ${{ inputs.model }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
+          prompt: |
+            You are the autonomous task sweep for this repo. The `gh` CLI is
+            authenticated and the project toolchain is already prepared
+            (./tool/setup.sh has run). Work through the GitHub Issues queue
+            and land finished code. Follow the repo's own rules (CLAUDE.md
+            and the rules doc it imports); the steps below are how the sweep
+            applies them.
+
+            1. Find work: `gh issue list --state open --label claude-ready` and
+               take them OLDEST first. Skip any issue that already has the
+               `claude-blocked` or `claude-working` label, or an open linked PR.
+            2. Process up to ${{ inputs.max_issues }} issues this run. For each:
+               a. Claim it — add the `claude-working` label so no other run (or
+                  the @claude path) picks it up, then read the issue and its ACs.
+                  (You do NOT remove `claude-working` yourself — a guaranteed
+                  cleanup step clears it when this run ends, whatever happens.)
+               b. VERIFY FIRST — never assume. Check EVERY AC against the actual
+                  codebase before writing anything. Do not infer "done" or "not
+                  done" from the title, labels, or any status ledger — read the
+                  code. Note, per AC, whether it is already satisfied (with
+                  `file:line` evidence) or missing/partial.
+               c. If the issue is ambiguous, underspecified, needs a product
+                  decision, or would touch anything on the denylist in (3):
+                  DO NOT guess. Add `claude-blocked`, comment what is needed, skip.
+               d. If EVERY AC is already satisfied by existing code (nothing to
+                  implement): do NOT write feature code. Post a comment listing
+                  each AC with its `file:line` evidence. Then:
+                  - If the repo keeps a spec/status ledger and it is STALE: open
+                    a small docs-only PR that corrects it, whose body begins with
+                    `Closes #<number>`. Do NOT close the issue yourself — the PR
+                    closes it on merge (and the review-ready workflow relabels it
+                    meanwhile). This is deliberate: never leave a closed issue
+                    with an open PR.
+                  - If the ledger is ALREADY correct (so there is no PR to
+                    open at all): close the issue directly
+                    (`gh issue close <n> --comment "..."`) with the evidence —
+                    nothing is left dangling because no PR exists.
+                  Then move to the next issue.
+               e. Otherwise create a branch `claude/issue-<number>-<short-slug>`
+                  off the latest origin/main and implement ONLY the missing or
+                  partial ACs (leave already-built ACs alone).
+               f. If the repo's rules define a status ledger, update it in the
+                  same branch so the next issue's agent reads the truth.
+               g. MERGE GATE — run `./tool/verify.sh` from the repo root. It is
+                  the repo's own definition of "checks pass" (the same gate CI
+                  runs) and it MUST exit 0. If you cannot make it pass, add
+                  `claude-blocked`, comment why, and skip. Do not open a PR for
+                  a change that does not pass `./tool/verify.sh`.
+               h. Commit, push, and open a PR whose body begins with
+                  `Closes #<number>` and states clearly which ACs were already
+                  built (with evidence) and which you added.
+               i. Do NOT merge. The `auto-merge` workflow merges the PR once CI
+                  is green IF the issue is labelled `auto-merge`; otherwise it
+                  stays open for human review.
+            3. Guardrails:
+               - HARD PATH DENYLIST — never create, modify, or delete any file
+                 under `.github/**` or `tool/**`, any Gradle file
+                 (`**/*.gradle`, `**/*.gradle.kts`, `gradle/**`,
+                 `**/gradle-wrapper.*`), any keystore or signing material
+                 (`**/*.keystore`, `**/*.jks`, `**/key.properties`), or `.env*`.
+                 Additional repo-specific denylist paths (may be empty):
+                 ${{ inputs.extra_denylist_paths }}
+                 If an issue would require touching any of these, add
+                 `claude-blocked`, comment why, and skip it. This is structural,
+                 not a judgment call — it makes "don't touch CI / secrets /
+                 signing" impossible to get wrong.
+               - One PR per issue, scoped to that issue only.
+               - Never force-push and never push to main directly.
+               - Never commit secrets.
+               - Keep changes minimal and idiomatic to the surrounding code.
+            4. If no issue is labelled `claude-ready`, do nothing.
+            5. Finish with a short summary: issues merged (with PR numbers),
+               issues blocked (with the reason), and anything skipped.
+            6. CONTINUE THE CHAIN (dispatch, not a comment). A comment posted by
+               this run's identity cannot start a new run — GitHub blocks that to
+               prevent loops — but `workflow_dispatch` is allowed. So: check
+               `gh issue list --state open --label claude-ready` and exclude any
+               that are `claude-blocked` or `claude-working`. Re-dispatch this
+               workflow to continue the queue — `gh workflow run
+               ${{ steps.dispatch.outputs.file }}` — ONLY IF both are true:
+               (a) at least one actionable `claude-ready` issue remains, and
+               (b) you made progress this run (opened a PR, closed, or blocked at
+               least one issue). If either is false, STOP and do not re-dispatch
+               — the chain is complete (or stalled), and re-dispatching would
+               loop. The concurrency group serialises runs, so the next run
+               waits for this one to finish.
+            ${{ inputs.extra_instructions }}
+
+      # MECHANICAL release — guaranteed, runs even if the sweep step failed,
+      # errored, timed out, or the agent ended early. A claude-working claim
+      # must never outlive the run that made it (contract invariant 5), so the
+      # end of every run clears the label from ALL issues that still carry it
+      # (--state all: an issue whose PR merged and CLOSED it mid-run is caught
+      # too). The singleton group means no other sweep is running; an on-demand
+      # run genuinely mid-flight re-asserts its own claim (brief, self-healing).
+      - name: Release stuck claude-working labels
+        if: ${{ always() && steps.work.outputs.has == 'true' }}
+        uses: sakal-dev/automation/actions/claim-github@v1
+        with:
+          mode: release-all
+          token: ${{ github.token }}
