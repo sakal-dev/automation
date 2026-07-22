@@ -1,0 +1,29 @@
+# systemd unit for the headless loop (method 4). Install on the VPS:
+#   cp worker.service /etc/systemd/system/sakal-worker.service
+#   cp env.example /etc/sakal-worker.env   # then EDIT — real values, root-only:
+#   chmod 600 /etc/sakal-worker.env
+#   systemctl daemon-reload && systemctl enable --now sakal-worker
+# Logs: journalctl -u sakal-worker -f
+[Unit]
+Description=sakal headless agent loop (method 4)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Restart=always
+RestartSec=15
+EnvironmentFile=/etc/sakal-worker.env
+# Fresh container per start; NET_ADMIN only for the egress firewall; the
+# repo checkout volume is the only writable mount. SIGTERM propagates to the
+# loop whose trap releases the claim before exit (verified by the kill test).
+ExecStartPre=-/usr/bin/docker rm -f sakal-worker
+ExecStart=/usr/bin/docker run --name sakal-worker --rm \
+  --cap-add NET_ADMIN \
+  --env-file /etc/sakal-worker.env \
+  -v /opt/sakal-automation/workers:/opt/workers:ro \
+  sakal-sandbox:latest \
+  bash /opt/workers/headless-loop/loop.sh
+ExecStop=/usr/bin/docker stop -t 30 sakal-worker
+
+[Install]
+WantedBy=multi-user.target
