@@ -1,0 +1,37 @@
+name: "📝 Docs"
+description: "Documentation only. No code paths touched."
+labels: ["type:docs", "claude-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Docs-only PRs may fast-path merge — **except guardrail files**
+        (`CLAUDE.md`, `docs/RULES.md`, `.github/**`), which always wait for review.
+  - type: textarea
+    id: what
+    attributes:
+      label: What to document / fix
+      placeholder: "README setup steps are stale since the tool/setup.sh change"
+    validations:
+      required: true
+  - type: textarea
+    id: audience
+    attributes:
+      label: Audience & where it lives
+      description: Who reads this and which file(s).
+      placeholder: "New developers — README.md §Getting started"
+    validations:
+      required: true
+  - type: textarea
+    id: source_of_truth
+    attributes:
+      label: Source of truth
+      description: What the docs must agree with (code, spec, decision).
+      placeholder: "tool/setup.sh as of main"
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      placeholder: "No code changes. No guardrail files."

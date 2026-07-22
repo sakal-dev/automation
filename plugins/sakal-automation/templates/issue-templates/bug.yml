@@ -1,0 +1,59 @@
+name: "🐛 Bug"
+description: "Existing behaviour deviates from intent. A bug is a falsification record."
+labels: ["type:bug", "claude-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bug disproves a claim. "Expected vs actual" is *the claim vs reality*.
+        Every bug fix must include a regression test that would have caught it.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Exact steps, smallest possible. If it needs data, say which.
+      placeholder: |
+        1. Sign in as owner on the staging build
+        2. Open Reports → Today
+        3. Create a refund from the POS
+        4. Pull to refresh
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected vs actual
+      description: The claim, then reality.
+      placeholder: |
+        Expected: today's total decreases by the refund amount
+        Actual: total unchanged until app restart
+    validations:
+      required: true
+  - type: input
+    id: violates
+    attributes:
+      label: Which spec/AC does this violate?
+      description: Story id, spec line, or "no written claim exists" (also a finding).
+      placeholder: "OWN-101 AC-2"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "app 1.4.2 · Android 14 · staging"
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      placeholder: "Fix the falsified behaviour only — no refactor of the reports module"
+  - type: textarea
+    id: pointers
+    attributes:
+      label: Pointers / suspected cause
+      placeholder: "Refund events may not invalidate the daily-total cache — see lib/core/cache/"
+  - type: markdown
+    attributes:
+      value: "**Done means:** repro no longer reproduces · a regression test exists that fails on the old code · nothing else broke (`tool/verify.sh`)."

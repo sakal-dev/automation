@@ -1,0 +1,26 @@
+name: "❓ Question"
+description: "A question or discussion. Not work; never enters the agent queue."
+labels: ["type:question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are for humans. If the answer turns out to require work, file the
+        right typed issue and link back here. If answering requires *investigation*,
+        convert to a 🔬 Spike.
+  - type: textarea
+    id: question
+    attributes:
+      label: The question
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What prompted it; what you already checked.
+  - type: input
+    id: needed_by
+    attributes:
+      label: Needed by (if time-sensitive)
+      placeholder: "Before the OWN-2xx epics start"

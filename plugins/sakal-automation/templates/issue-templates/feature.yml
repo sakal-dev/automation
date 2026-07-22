@@ -1,0 +1,54 @@
+name: "✨ Feature"
+description: "New capability. The default agent-workable type."
+labels: ["type:feature", "claude-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Title convention:** `<STORY-ID>: <outcome>` — e.g. `OWN-101: Owner sees today's sales at a glance`.
+        One issue = one PR = one agent run. More than ~5 ACs or more than one module → split it.
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The user problem and why now. Agents that know why make survivable trade-offs.
+      placeholder: "Owners currently open three screens to see daily revenue…"
+    validations:
+      required: true
+  - type: textarea
+    id: acs
+    attributes:
+      label: Acceptance criteria
+      description: One verifiable claim per line. Write each as a statement code could prove.
+      placeholder: |
+        - [ ] Dashboard shows today's gross sales, updated without app restart
+        - [ ] Empty state renders when there are no sales yet
+        - [ ] Total matches the sum of receipts for the local business day (UTC+7)
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: What must NOT change. The main guard against agent overreach.
+      placeholder: "- Do not touch the sync engine\n- No new dependencies"
+    validations:
+      required: true
+  - type: textarea
+    id: pointers
+    attributes:
+      label: Pointers
+      description: "Files, symbols, patterns to follow — prevents inventing a second pattern."
+      placeholder: "lib/features/reports/ — follow the existing DailyReport pattern"
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints / decisions
+      description: Task-relevant decisions with reasons, or links to spec/ADR sections.
+      placeholder: "Drift, not raw SQL — docs/DECISIONS.md#3"
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification beyond tool/verify.sh
+      description: Extra proof this task needs (specific tests, manual checks).
+      placeholder: "Widget test covering the empty state"

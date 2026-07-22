@@ -1,0 +1,40 @@
+name: "🗂 Epic"
+description: "Container for related issues. Never worked directly — children are."
+labels: ["type:epic"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epics are **never** labelled `claude-ready`; agents work the children.
+        Keep the tasklist current — it is the epic's progress bar.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: What is true when this epic is done, in one or two sentences.
+      placeholder: "An owner can see live daily performance without opening the POS"
+    validations:
+      required: true
+  - type: textarea
+    id: children
+    attributes:
+      label: Child issues
+      description: "GitHub tasklist — add issues as they're created; GitHub tracks completion."
+      placeholder: |
+        ```[tasklist]
+        - [ ] #12
+        - [ ] #13
+        - [ ] OWN-104 (to be filed)
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: sequencing
+    attributes:
+      label: Sequencing / dependencies
+      placeholder: "#12 before #13 (schema first). #14 independent."
+  - type: textarea
+    id: decisions
+    attributes:
+      label: Decisions this epic depends on
+      placeholder: "Sync strategy ADR (spike #9) must land first"

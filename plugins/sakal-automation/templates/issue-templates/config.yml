@@ -1,0 +1,9 @@
+# Issue template chooser config.
+# blank issues are disabled: every issue goes through a typed form so agents
+# always receive a predictable shape. (Org-default variant: place this whole
+# ISSUE_TEMPLATE folder in the sakal-dev/.github repo.)
+blank_issues_enabled: false
+contact_links:
+  - name: Not sure which type?
+    url: https://github.com/sakal-dev/automation/blob/main/plugins/sakal-automation/templates/ISSUE-SKELETONS.md
+    about: One-page guide to the ten issue types and when to use each.

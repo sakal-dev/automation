@@ -1,0 +1,43 @@
+name: "🔐 Security"
+description: "Security defect or hardening. Always human-reviewed; never sweep-drained."
+labels: ["type:security", "review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Process rules (RULES.md):** security issues are **not** labelled
+        `claude-ready` by default — a human decides per issue whether an agent may
+        work it. Their PRs **never** auto-merge. Do not include working exploits or
+        real credentials in the issue; describe, don't arm. If this is a live
+        exploitable vulnerability in production, contact the owner directly as well.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Vulnerability (something is exploitable)
+        - Hardening (defence-in-depth improvement)
+        - Dependency advisory (CVE in a dep)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is exposed, to whom, under what conditions. Describe the class of attack, not a working exploit.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact if exploited
+      placeholder: "An authenticated staff account could read another branch's sales data"
+    validations:
+      required: true
+  - type: textarea
+    id: fix_direction
+    attributes:
+      label: Suggested fix direction (if known)
+  - type: markdown
+    attributes:
+      value: "**Done means:** the exposure is closed · a test proves the previous path is denied · dependency advisories show the patched version in the lockfile."

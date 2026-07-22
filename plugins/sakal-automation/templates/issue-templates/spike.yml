@@ -1,0 +1,44 @@
+name: "🔬 Spike"
+description: "Investigation. Output is written knowledge — no production code merges."
+labels: ["type:spike", "claude-ready"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Process rule (RULES.md):** a spike merges **no production code**. Its PR (if
+        any) contains only the write-up. Throwaway experiments stay on the branch.
+        A research task must never become an uninvited implementation.
+  - type: textarea
+    id: questions
+    attributes:
+      label: Questions to answer
+      description: Specific, answerable questions. These are the spike's ACs.
+      placeholder: |
+        1. Can Drift stream cross-isolate updates, or do we need a manual notifier?
+        2. What is the battery cost of a 30s sync poll vs push?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Why we need to know
+      description: The decision this unblocks.
+      placeholder: "Blocks the sync-strategy decision for OWN-2xx epics"
+    validations:
+      required: true
+  - type: input
+    id: deliverable
+    attributes:
+      label: Where the findings go
+      description: The doc/ADR/comment that will hold the written answers.
+      placeholder: "docs/adr/0007-sync-strategy.md (draft)"
+    validations:
+      required: true
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      placeholder: "One agent run / half a day"
+  - type: markdown
+    attributes:
+      value: "**Done means:** every question has a written, evidenced answer at the stated location — including \"we couldn't determine X because Y\", which is a valid answer."

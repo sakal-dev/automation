@@ -1,0 +1,52 @@
+name: "🚨 Hotfix"
+description: "Urgent production bug. Same shape as Bug, worked first — but NEVER auto-merged."
+labels: ["type:bug", "priority:urgent", "claude-ready", "review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Process rule (RULES.md):** `priority:urgent` issues are worked first and
+        **never auto-merge** — urgency is when unreviewed code is most dangerous, not
+        least. A human reviews the PR, always.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Production impact
+      description: Who is affected, how badly, since when.
+      placeholder: "All owners: today's totals frozen since the 1.4.2 rollout at 09:00 ICT"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "app 1.4.2 · production"
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Known workaround (if any)
+      placeholder: "Restarting the app refreshes the total"
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      placeholder: "Smallest possible fix. Root-cause refactor goes in a follow-up chore."
+  - type: markdown
+    attributes:
+      value: "**Done means:** impact stopped · regression test exists · follow-up issue filed for any deferred root cause."

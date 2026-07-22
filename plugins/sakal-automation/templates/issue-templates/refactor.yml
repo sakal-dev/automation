@@ -1,0 +1,42 @@
+name: "🧱 Refactor"
+description: "Restructure code; behaviour preserved. A chore with a design goal."
+labels: ["type:refactor", "claude-ready"]
+body:
+  - type: textarea
+    id: why
+    attributes:
+      label: Why — the design problem
+      description: What the current structure makes hard, and what the target structure enables.
+      placeholder: "Report widgets query the DB directly; moving to a repository layer lets sync invalidate one place"
+    validations:
+      required: true
+  - type: textarea
+    id: target
+    attributes:
+      label: Target shape
+      description: The intended end structure — modules, boundaries, names.
+      placeholder: "lib/features/reports/data/reports_repository.dart owning all report queries"
+    validations:
+      required: true
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Invariant — behaviour that must not change
+      placeholder: "All screens render identical data; no schema change; public API of core/ unchanged"
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      placeholder: "- No new features while restructuring\n- Do not touch modules other than reports"
+    validations:
+      required: true
+  - type: textarea
+    id: pointers
+    attributes:
+      label: Pointers
+      placeholder: "Follow the repository pattern already used in lib/features/inventory/"
+  - type: markdown
+    attributes:
+      value: "**Done means:** target shape in place · invariant held · `tool/verify.sh` green. Consider splitting if it can't land in one reviewable PR."
