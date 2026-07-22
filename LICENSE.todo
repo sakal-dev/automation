@@ -1,0 +1,8 @@
+No license chosen yet — deliberately.
+
+Open question: open-core or fully open. Whether the engine (workflows, actions,
+plugin) is MIT while something else stays closed, or everything is MIT, is
+Socheat's call and has not been made.
+
+Until decided: all rights reserved by default. Do NOT add a LICENSE file, an
+SPDX header, or a `license` field to any manifest without explicit instruction.

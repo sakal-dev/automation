@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+
+# Secrets — never committed, ever (see docs/task-contract.md invariant 8)
+.env
+.env.*
+*.pem
+*.key
+
+# Tooling
+node_modules/
+dist/
+*.log
