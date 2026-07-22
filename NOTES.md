@@ -42,13 +42,13 @@ methods are *where/how the agent runs*:
 
 | # | Method | What it is | What trying it looks like | Status |
 |---|---|---|---|---|
-| 1 | Claude Code on the web | Anthropic-hosted VM per task; push a task, it works, PR comes back | use `automation-dispatch` to hand it a brief; judge the PR with the same gate | used ad-hoc for building; not wired |
-| 2 | Codex cloud | Same shape, OpenAI side, via ChatGPT | same dispatch skill, Codex flavour | not started |
-| 3 | claude-code-action | Claude inside GitHub Actions: `@claude` on-demand + scheduled sweep | **the current experiment on sakalpos-garage** — the hardened system | live |
-| 4 | Headless loop | `claude -p` in a loop on a VPS (cron/systemd), polling a queue | deploy `workers/headless-loop` in the Docker sandbox against one repo | not started |
-| 5 | Agent SDK worker | Same engine as a library; job queue + MCP; the long-term worker | deploy `workers/sdk-worker` with the sakalmaster MCP | not started |
-| 6 | OpenClaw | Self-hosted chat gateway (Telegram → agent); an *interface*, not an executor | recipe only: point its agent at the dispatch skill + MCP | not started |
-| 7 | Orchestrators | Run N workers in parallel (amux, tmux-orchestrator, agent teams) | N copies of method 4/5; the atomic claim lease makes N safe | later |
+| 1 | Claude Code on the web | Anthropic-hosted VM per task; push a task, it works, PR comes back | use `automation-dispatch` to hand it a brief; judge the PR with the same gate | dispatch skill ready; experiment pending human |
+| 2 | Codex cloud | Same shape, OpenAI side, via ChatGPT | same dispatch skill, Codex flavour | procedure written; blocked: no account |
+| 3 | claude-code-action | Claude inside GitHub Actions: `@claude` on-demand + scheduled sweep | **the current experiment on sakalpos-garage** — the hardened system | live as engine @v1 (garage + owner callers) |
+| 4 | Headless loop | `claude -p` in a loop on a VPS (cron/systemd), polling a queue | deploy `workers/headless-loop` in the Docker sandbox against one repo | built + kill-tested; drain pending worker token |
+| 5 | Agent SDK worker | Same engine as a library; job queue + MCP; the long-term worker | deploy `workers/sdk-worker` with the sakalmaster MCP | built (hook denylist); drain pending worker token |
+| 6 | OpenClaw | Self-hosted chat gateway (Telegram → agent); an *interface*, not an executor | recipe only: point its agent at the dispatch skill + MCP | recipe written; not run |
+| 7 | Orchestrators | Run N workers in parallel (amux, tmux-orchestrator, agent teams) | N copies of method 4/5; the atomic claim lease makes N safe | compose + mock experiment run (see methods/07) |
 
 Methods 1–2 are push-only (they cannot poll a queue); the dispatch skill bridges
 them. Methods 4–5 are pull (they poll). Method 3 is both (`@claude` push, sweep

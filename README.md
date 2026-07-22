@@ -61,8 +61,28 @@ changed plus the secrets checklist:
 Three pieces, all installed by the `automation-install` skill (<30 min, no
 manual YAML):
 
-1. **Callers** — ~10-line workflows `uses:`-ing the engines here, pinned to a
-   tag, never `@main`. Versioning follows the actions-ecosystem convention:
+1. **Callers** — small workflows `uses:`-ing the engines here, pinned to a
+   tag, never `@main`. The real thing, from sakalpos-garage (caller #1):
+
+   ```yaml
+   name: Claude daily task sweep
+   on:
+     schedule:
+       - cron: "0 15,21 * * *"   # off-peak minutes; cron is UTC + best-effort
+     workflow_dispatch:           # required: self-redispatch targets this file
+   permissions:                   # the engine cannot raise beyond this grant
+     contents: write
+     pull-requests: write
+     issues: write
+     id-token: write
+     actions: write
+   jobs:
+     sweep:
+       uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+       secrets: inherit
+   ```
+
+   Versioning follows the actions-ecosystem convention:
    **`v1` is a floating major tag** — it always points at the latest
    compatible engine and is moved on each release; **immutable `v1.x.y` tags**
    mark the releases themselves (first cut: `v1.0.0` at garage parity).

@@ -9,14 +9,14 @@ Session prompts live in `docs/prompts/` (local, gitignored).
 | # | Session | State | Delivers |
 |---|---|---|---|
 | 1 | Init & skeleton | ✅ | Task contract (the spec) · self-documenting stubs · constraints doc · methods lab notebook 01–07 |
-| 2 | Garage extraction | 🟡 | Engine real (4 workflows + 2 actions, findings folded, floating `v1`); garage = caller #1 (578→102 lines). **Remaining:** parity legs 2–5 → cut immutable `v1.0.0` → method-03 verdict |
+| 2 | Garage extraction | ✅ | Engine real, `v1.0.0` cut + floating `v1`; garage = caller #1 (578→102 lines); parity proven on real issues (methods/03 verdict). Last human click: `auto-merge` on PR #105 |
 | — | Issue & context system | ✅ (via Cowork) | 10 typed issue forms + labels.sh + skeletons · `docs/issues.md` (incl. org `.github` defaults trick) · `docs/context.md` (five-layer model) · CLAUDE.md template with `@import` rules + rotating changelog |
-| 3 | The plugin | ⏳ next after 2 | `automation-install` + `automation-operate` skills for real, wiring ALL templates (callers, tool/ scripts, issue system, labels, CLAUDE.md/RULES/changelog). Acceptance: onboard one Laravel or React repo in <30 min, no manual YAML. Also: create `sakal-dev/.github` org defaults |
-| 4 | Sakal source | ⏳ | `claim-sakal` / `report-sakal` actions real (per SakalMaster `docs/ci/agent-runs.md`) · `verify.yml` real · flip garage to integrated mode. **Needs:** SakalMaster staging (its session 11 track B) + the `claim_next_task(project, app)` app filter |
-| 5 | Dispatch (methods 1–2) | ⏳ | `automation-dispatch` skill: assemble brief → hand to Claude Code on the web / Codex cloud; PRs return into the same gate. Lab entries for methods 01–02 |
-| 6 | Headless worker (method 4) | ⏳ | `workers/headless-loop` real: Docker sandbox (non-root, egress firewall) + systemd unit + dual-source polling. First VPS experiment; lab entry 04 |
-| 7 | SDK worker (method 5) | ⏳ | `workers/sdk-worker`: Agent SDK + sakalmaster MCP. The long-term worker; lab entry 05 |
-| 8 | Fleet & interfaces (methods 6–7) | ⏳ | Recipes only: N workers in parallel (the DB lease makes N safe) · OpenClaw as phone→dispatch interface. Lab entries 06–07 |
+| 3 | The plugin | ✅ | Both skills real; all templates built (script pairs, callers, RULES, changelog); `sakal-dev/.github` org defaults live. Acceptance: sakalpos-owner onboarded in **14m11s**, no manual YAML; sweep smoke waits on the repo's `CLAUDE_CODE_OAUTH_TOKEN` |
+| 4 | Sakal source | ✅ (flip deferred) | `claim-sakal`/`report-sakal`/`verify.yml` real; dual-source sweep (github default, parity re-checked); 10/10 local-stack test. App filter FILED as sakal-dev/sakalmaster#1 (stories carry app_id — small change); succeeded-doesn't-retire-task finding encoded (park on success). Live garage flip: exact steps in methods/03, waits on staging + the filter |
+| 5 | Dispatch (methods 1–2) | ✅ (experiments pending human) | Skill real (brief format + verbatim standing block + check-on-dispatch). Method-1 experiment prepared, needs the human's browser session; method-2 blocked: no Codex account (logged honestly) |
+| 6 | Headless worker (method 4) | ✅ built/local-verified | Sandbox image + default-deny egress (verified), loop over shared `workers/lib` lifecycle, systemd unit, kill test PASSED (found + fixed the foreground-trap SIGTERM gap). Real 2-issue drain waits on a worker `CLAUDE_CODE_OAUTH_TOKEN` |
+| 7 | SDK worker (method 5) | ✅ built | TS service compiles against the real SDK; PreToolUse hook = the denylist as CODE (probe 10/10); REST claim path chosen (one lifecycle, no drift). Live drain + hook-fire proof ride with 6's token |
+| 8 | Fleet & interfaces (methods 6–7) | ✅ recipes + mock experiment | Fleet compose (one service per identity — per-replica tokens are CORRECTNESS, see methods/07: double-claim + rate-limited releases observed and hardened against); OpenClaw recipe with the read+dispatch-never-write rule. Real-agent fleet rides with 6/7 |
 | 9 | Ops hardening | ⏳ later | Cost/method comparison from the lab notebook · release discipline review · org-plan upgrade migration (org secrets) · anything the first months of real runs teach |
 
 ## Dependency edges
