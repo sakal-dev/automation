@@ -30,6 +30,9 @@ thumb). Everything installed obeys `docs/task-contract.md`.
 6. **Append the CLAUDE.md section** from the template: denylist, "agents never
    verify their own claims", how to summon @claude.
 7. **Secrets checklist** — org-level `CLAUDE_CODE_OAUTH_TOKEN` + `SAKAL_TOKEN`
-   reachable from this repo; app installed. Print what's missing; never
-   handle secret values directly.
+   reachable from this repo; app installed. The org secrets already EXIST —
+   never re-mint or re-set them; onboarding only means adding this repo to
+   the secret's read-access list (the exact commands live in the README's
+   "Secrets — set up once, grant per repo" section — follow that). Print
+   what's missing; never handle secret values directly.
 8. **Smoke test** — one labelled test issue; watch it drain through the gate.

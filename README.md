@@ -61,8 +61,34 @@ manual YAML):
 3. **The plugin** — install this repo as a Claude Code plugin marketplace and
    the install/operate/dispatch skills come along.
 
-Secrets are org-level (`CLAUDE_CODE_OAUTH_TOKEN`, `SAKAL_TOKEN`) — one
-rotation point.
+### Secrets — set up once, grant per repo
+
+Secrets are **org-level** (`CLAUDE_CODE_OAUTH_TOKEN`, `SAKAL_TOKEN`) — one
+value, one rotation point. They were created once and never need re-minting:
+
+```bash
+# One-time (already done): mint a token and store it at org level.
+claude setup-token     # interactive browser login; prints sk-ant-oat01-…
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --org sakal-dev --visibility selected --repos <first-repo>
+```
+
+**Onboarding a new repo does NOT mean setting the secret again.** The value
+stays put; you only add the repo to the secret's read-access list:
+
+```bash
+repo_id=$(gh api repos/sakal-dev/<new-repo> --jq .id)
+gh api -X PUT orgs/sakal-dev/actions/secrets/CLAUDE_CODE_OAUTH_TOKEN/repositories/$repo_id
+```
+
+(or UI: Org settings → Secrets and variables → Actions → the secret →
+*Repository access* → tick the repo.)
+
+Deliberately `selected`, not `all`: workflows in agent-worked repos are
+semi-trusted, so each repo is granted read access explicitly. Rules that
+hold everywhere: callers reach secrets via `secrets: inherit`; a repo-level
+secret with the same name overrides the org one (useful for migration —
+delete the repo copy and the org secret takes over); the token value is
+never written down anywhere but the org secret store.
 
 ## Background
 
