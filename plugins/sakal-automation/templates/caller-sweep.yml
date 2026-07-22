@@ -1,0 +1,36 @@
+# Caller for the shared automation engine's queue sweep (sakal-dev/automation).
+# The engine owns ALL behaviour; this file owns the schedule, the permissions,
+# and repo specifics. Installed by automation-install; placeholders:
+#   <M>   off-peak cron minute (17-57, NOT :00/:30) — derived from the repo
+#         name so org repos don't pile onto the same minute
+#   <EXTRA_INSTRUCTIONS>  repo specifics the stack-blind engine cannot know
+#         (e.g. where the status ledger lives). Optional — delete the `with:`
+#         block if empty. Appended AFTER the engine's guardrails behind a
+#         precedence line; nothing here can loosen them.
+#
+# Cron is UTC and best-effort (minutes late normally, up to ~an hour under
+# load). workflow_dispatch is REQUIRED: the engine's self-redispatch targets
+# this file by name.
+name: Claude daily task sweep
+
+on:
+  schedule:
+    - cron: "<M> 15,21 * * *"
+  workflow_dispatch:
+
+# A reusable workflow cannot raise permissions beyond this grant — a missing
+# line here fails inside the engine as a silent 403.
+permissions:
+  contents: write # branches + pushes
+  pull-requests: write # open PRs
+  issues: write # claude-working / claude-blocked labels
+  id-token: write # claude-code-action OIDC
+  actions: write # self-redispatch (gh workflow run)
+
+jobs:
+  sweep:
+    uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+    with:
+      extra_instructions: |
+        <EXTRA_INSTRUCTIONS>
+    secrets: inherit

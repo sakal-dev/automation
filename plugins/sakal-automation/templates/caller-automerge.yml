@@ -1,0 +1,30 @@
+# Caller for the shared automation engine's label-gated merge
+# (sakal-dev/automation). Auto-merge is opt-in per issue; the named CI check
+# must be green; guardrail files never auto-merge (guardrail beats docs-only).
+# Placeholders:
+#   <CI_WORKFLOW_NAME>  the `name:` of this repo's CI workflow (usually "CI")
+#   ci_check_name       ONLY needed if the repo's CI job is not named
+#                       `analyze-and-test` — then uncomment the `with:` block.
+name: Auto-merge
+
+on:
+  workflow_run:
+    workflows: ["<CI_WORKFLOW_NAME>"]
+    types: [completed]
+  pull_request:
+    types: [opened, reopened, ready_for_review, labeled]
+
+# A reusable workflow cannot raise permissions beyond this grant — a missing
+# line here fails inside the engine as a silent 403.
+permissions:
+  contents: write # merge + delete branch
+  pull-requests: write # merge PRs
+  issues: write # read the auto-merge label + close the linked issue on merge
+  checks: read # read the CI check conclusion on the PR head
+
+jobs:
+  automerge:
+    uses: sakal-dev/automation/.github/workflows/automerge.yml@v1
+    # with:
+    #   ci_check_name: analyze-and-test
+    secrets: inherit

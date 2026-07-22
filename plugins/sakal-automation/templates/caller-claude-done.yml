@@ -1,0 +1,21 @@
+# Caller for the shared automation engine's review-ready labelling
+# (sakal-dev/automation). When a PR that `Closes #<n>` opens, the linked issue
+# moves claude-ready → claude-done and in-progress markers clear —
+# mechanically, whoever opened the PR. No placeholders.
+name: Label review-ready
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+# A reusable workflow cannot raise permissions beyond this grant — a missing
+# line here fails inside the engine as a silent 403.
+permissions:
+  contents: read
+  issues: write # swap claude-ready → claude-done on the linked issue
+  pull-requests: read # read the PR's linked issues
+
+jobs:
+  label:
+    uses: sakal-dev/automation/.github/workflows/claude-done.yml@v1
+    secrets: inherit

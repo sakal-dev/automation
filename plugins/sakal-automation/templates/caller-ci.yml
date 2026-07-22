@@ -1,0 +1,32 @@
+name: CI
+
+# Analyze + test on every PR — the durable safety net. The actual checks live
+# in ./tool/verify.sh (the repo's single merge gate, also run by agents before
+# opening a PR); this job prepares the environment and runs it. The job name
+# `analyze-and-test` is LOAD-BEARING: automerge gates on it — rename only
+# together with the automerge caller's ci_check_name input.
+# Installed by automation-install. No placeholders.
+
+on:
+  # PRs only; docs/spec-only changes are skipped — they cannot affect the
+  # gate (automerge treats those PRs as "CI not applicable").
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache + ./tool/setup.sh via the shared stack-blind action.
+      - uses: sakal-dev/automation/actions/setup-project@v1
+
+      - name: Verify (./tool/verify.sh)
+        run: ./tool/verify.sh
