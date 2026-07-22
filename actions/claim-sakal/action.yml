@@ -1,36 +1,104 @@
 # =============================================================================
-# claim-sakal — SOURCE step, sakalmaster (integrated) mode
-# STATUS: STUB — documents intent only; wired in migration step 4 per
-# SakalMaster's docs/ci/agent-runs.md.
+# claim-sakal — SOURCE step, sakalmaster (integrated) mode. REAL.
+# Contract: docs/task-contract.md step 1. REST per SakalMaster's
+# docs/ci/agent-runs.md: token-exchange (SAKAL_TOKEN → ~15-min JWT) →
+# POST /rest/v1/rpc/claim_next_task. The claim is atomic and leased
+# (FOR UPDATE SKIP LOCKED server-side): one winner even with parallel
+# claimants; an expired lease makes the task claimable again and the old run
+# `abandoned`. This action never retries a claim it lost.
 #
-# What it will do
-#   Claim one task from the SakalMaster queue over REST:
-#   token-exchange (SAKAL_TOKEN → session JWT) → PostgREST →
-#   claim_next_task(project, app). The claim is an ATOMIC, LEASED, expiring
-#   lock — that atomicity is what makes N concurrent claimants safe (a CI
-#   sweep and a VPS worker on the same app never double-work).
-#   The app filter is NON-OPTIONAL (contract invariant 4): a repo = one
-#   SakalMaster app; the queue lives per project; an unfiltered claim would
-#   grab tasks this repo cannot implement. If the RPC lacks the filter, that
-#   is a SakalMaster change to request, not something to approximate here.
-#   No explicit release input: outcome/block reporting (report-sakal) ends the
-#   lease; a dead run's lease expires on its own.
+# APP FILTER (contract invariant 4): the `app` input forwards as `p_app` ONLY
+# when non-empty. As of 2026-07-22 SakalMaster's claim_next_task has NO app
+# parameter — the formal request is filed (see the SakalMaster issue
+# referenced in docs/methods/03). Until it lands: leave `app` empty ONLY for
+# projects with a single app; a multi-app project MUST NOT run a filterless
+# claim from a repo-bound claimant.
 #
-# Intended inputs:
-#   project:    SakalMaster project slug   (required)
-#   app:        SakalMaster app slug       (required — the claim filter)
-#   base-url:   SakalMaster instance       (e.g. staging)
-#   token:      SAKAL_TOKEN (org secret)
-# Intended outputs: claimed: 'true'|'false', task-id, run-id
+# Outputs: claimed=true|false; run_id, task_key, story_key when claimed.
+# Empty queue → claimed=false, success exit (the caller's cheap gate).
 # =============================================================================
 name: claim-sakal
-description: "STUB — claim_next_task(project, app) via token-exchange + PostgREST"
+description: "Claim one task from the SakalMaster queue (token-exchange + PostgREST, atomic lease)"
+
+inputs:
+  sakal_url:
+    description: SakalMaster Supabase URL (e.g. https://xyz.supabase.co)
+    required: true
+  anon_key:
+    description: Supabase anon key (public)
+    required: true
+  project:
+    description: SakalMaster project id (uuid)
+    required: true
+  app:
+    description: "App key/id for the claim filter (forwarded as p_app only when set — requires the SakalMaster app-filter change)"
+    required: false
+    default: ""
+  source:
+    description: Claim source recorded on the run
+    required: false
+    default: "github-sweep"
+  lease_seconds:
+    description: Lease duration; heartbeats extend it
+    required: false
+    default: "1800"
+  token:
+    description: SAKAL_TOKEN — service-account PAT (secret)
+    required: true
+
+outputs:
+  claimed:
+    description: "'true' if a task was claimed"
+    value: ${{ steps.claim.outputs.claimed }}
+  run_id:
+    description: The agent_runs id owning the lease
+    value: ${{ steps.claim.outputs.run_id }}
+  task_key:
+    description: Claimed task key (e.g. TSK-0012)
+    value: ${{ steps.claim.outputs.task_key }}
+  story_key:
+    description: The story the task implements (may be empty)
+    value: ${{ steps.claim.outputs.story_key }}
 
 runs:
   using: composite
   steps:
-    - name: Not implemented
+    - name: Exchange token and claim
+      id: claim
       shell: bash
+      env:
+        SAKAL_URL: ${{ inputs.sakal_url }}
+        ANON: ${{ inputs.anon_key }}
+        TOKEN: ${{ inputs.token }}
+        PROJECT: ${{ inputs.project }}
+        APP: ${{ inputs.app }}
+        SRC: ${{ inputs.source }}
+        LEASE: ${{ inputs.lease_seconds }}
       run: |
-        echo "::error::actions/claim-sakal is a stub — wired when the sakal source lands (migration step 4)"
-        exit 1
+        set -euo pipefail
+        JWT=$(curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \
+          -H "apikey: $ANON" -H "content-type: application/json" \
+          -d "{\"token\":\"$TOKEN\"}" | jq -r '.access_token // empty')
+        if [ -z "$JWT" ]; then
+          echo "::error::token-exchange failed — check SAKAL_URL / SAKAL_TOKEN / anon key"
+          exit 1
+        fi
+        payload="{\"p_project\":\"$PROJECT\",\"p_source\":\"$SRC\",\"p_lease_seconds\":$LEASE"
+        if [ -n "$APP" ]; then payload="$payload,\"p_app\":\"$APP\""; fi
+        payload="$payload}"
+        CLAIM=$(curl -sf -X POST "$SAKAL_URL/rest/v1/rpc/claim_next_task" \
+          -H "apikey: $ANON" -H "authorization: Bearer $JWT" \
+          -H "content-type: application/json" -d "$payload")
+        RUN=$(echo "$CLAIM" | jq -r '.[0].run_id // empty')
+        if [ -z "$RUN" ]; then
+          echo "claimed=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::SakalMaster queue empty for this project/app — nothing to claim."
+          exit 0
+        fi
+        {
+          echo "claimed=true"
+          echo "run_id=$RUN"
+          echo "task_key=$(echo "$CLAIM" | jq -r '.[0].task_key // empty')"
+          echo "story_key=$(echo "$CLAIM" | jq -r '.[0].story_key // empty')"
+        } >> "$GITHUB_OUTPUT"
+        echo "::notice::Claimed $(echo "$CLAIM" | jq -r '.[0].task_key') (run $RUN)"

@@ -1,37 +1,107 @@
 # =============================================================================
-# report-sakal — run reporting into agent_runs (integrated mode)
-# STATUS: STUB — documents intent only; wired in migration step 4 per
-# SakalMaster's docs/ci/agent-runs.md.
-#
-# What it will do
-#   Write the run lifecycle to SakalMaster's agent_runs over REST
-#   (token-exchange → PostgREST), attributed to the claimant's identity
-#   (contract invariant 8):
-#   - kind=heartbeat  "still alive" — keeps the claim lease held so a live
-#                     run is distinguishable from a dead one
-#   - kind=outcome    finished: PR URL + the executor's CLAIMS (citations).
-#                     Claims are input to the verifier, never conclusions —
-#                     agents never verify their own claims (invariant 3)
-#   - kind=block      cannot proceed without a decision: carries the question,
-#                     which surfaces in SakalMaster's Needs-me. Blocking is an
-#                     outcome, not a failure.
-#   The Team · Agents dashboard derives its view from these records at read
-#   time; nothing here writes status directly.
-#
-# Intended inputs:
-#   kind:      heartbeat | outcome | block
-#   run-id:    from claim-sakal
-#   payload:   kind-specific JSON (PR URL + citations / question)
-#   base-url, token: as in claim-sakal
+# report-sakal — run lifecycle reporting into SakalMaster. REAL.
+# Contract: docs/task-contract.md step 4 (integrated). REST per SakalMaster's
+# docs/ci/agent-runs.md. One action, five modes:
+#   heartbeat   report_run status=running (keeps the lease alive; a silent
+#               run is reclaimed after lease expiry)
+#   progress    report_run status=running + summary text
+#   succeeded   report_run status=succeeded + p_pr_ref (repo#pr)
+#   failed      report_run status=failed + error text
+#   blocked     block_run + reason — the server raises the story's question
+#               into Needs-me. Blocking is an outcome, not a failure.
+# report_run/block_run only accept writes on a run THIS token's identity owns
+# (attribution is server-enforced). Call the final outcome from an always()
+# step — the integrated analogue of the label release. A `succeeded` run
+# changes no AC: the verifier decides what the work proved.
+# Exchanges the PAT per call (the JWT lives ~15 min; runs live longer).
 # =============================================================================
 name: report-sakal
-description: "STUB — heartbeat / outcome / block into SakalMaster agent_runs"
+description: "Report run lifecycle (heartbeat/progress/succeeded/failed/blocked) into SakalMaster agent_runs"
+
+inputs:
+  mode:
+    description: "heartbeat | progress | succeeded | failed | blocked"
+    required: true
+  sakal_url:
+    description: SakalMaster Supabase URL
+    required: true
+  anon_key:
+    description: Supabase anon key (public)
+    required: true
+  project:
+    description: SakalMaster project id (uuid)
+    required: true
+  run_id:
+    description: The run to report on (from claim-sakal)
+    required: true
+  summary:
+    description: Progress summary (mode=progress; optional elsewhere)
+    required: false
+    default: ""
+  error:
+    description: Error text (mode=failed)
+    required: false
+    default: ""
+  pr_ref:
+    description: "PR reference repo#number (mode=succeeded)"
+    required: false
+    default: ""
+  reason:
+    description: The question for the human (mode=blocked — REQUIRED there)
+    required: false
+    default: ""
+  lease_seconds:
+    description: Lease extension on heartbeat/progress
+    required: false
+    default: "1800"
+  token:
+    description: SAKAL_TOKEN — service-account PAT (secret)
+    required: true
 
 runs:
   using: composite
   steps:
-    - name: Not implemented
+    - name: Report
       shell: bash
+      env:
+        SAKAL_URL: ${{ inputs.sakal_url }}
+        ANON: ${{ inputs.anon_key }}
+        TOKEN: ${{ inputs.token }}
+        PROJECT: ${{ inputs.project }}
+        RUN: ${{ inputs.run_id }}
+        MODE: ${{ inputs.mode }}
+        SUMMARY: ${{ inputs.summary }}
+        ERRTXT: ${{ inputs.error }}
+        PR_REF: ${{ inputs.pr_ref }}
+        REASON: ${{ inputs.reason }}
+        LEASE: ${{ inputs.lease_seconds }}
       run: |
-        echo "::error::actions/report-sakal is a stub — wired when the sakal source lands (migration step 4)"
-        exit 1
+        set -euo pipefail
+        JWT=$(curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \
+          -H "apikey: $ANON" -H "content-type: application/json" \
+          -d "{\"token\":\"$TOKEN\"}" | jq -r '.access_token // empty')
+        [ -z "$JWT" ] && { echo "::error::token-exchange failed"; exit 1; }
+        H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+        RPC="$SAKAL_URL/rest/v1/rpc"
+        jstr() { jq -Rn --arg v "$1" '$v'; }   # safe JSON string
+        case "$MODE" in
+          heartbeat)
+            curl -sf -X POST "$RPC/report_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"running\",\"p_lease_seconds\":$LEASE}" ;;
+          progress)
+            curl -sf -X POST "$RPC/report_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"running\",\"p_summary\":$(jstr "$SUMMARY"),\"p_lease_seconds\":$LEASE}" ;;
+          succeeded)
+            curl -sf -X POST "$RPC/report_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"succeeded\",\"p_pr_ref\":$(jstr "$PR_REF")}" ;;
+          failed)
+            curl -sf -X POST "$RPC/report_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"failed\",\"p_error\":$(jstr "$ERRTXT")}" ;;
+          blocked)
+            [ -z "$REASON" ] && { echo "::error::mode=blocked requires a reason (the human's question)"; exit 1; }
+            curl -sf -X POST "$RPC/block_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_reason\":$(jstr "$REASON")}" ;;
+          *)
+            echo "::error::report-sakal: unknown mode '$MODE'"; exit 1 ;;
+        esac
+        echo "::notice::report-sakal: $MODE recorded for run $RUN"

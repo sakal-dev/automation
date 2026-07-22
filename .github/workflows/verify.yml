@@ -1,45 +1,95 @@
 # =============================================================================
-# verify.yml — sakal-verify in CI (INTEGRATED mode only; judges ALL methods)
-# STATUS: STUB — documents intent only. Wired in migration step 4 (the sakal
-# source), per SakalMaster's docs/ci/agent-runs.md.
+# verify.yml — the SakalMaster citation verifier in CI (INTEGRATED mode). REAL.
+# Contract: docs/task-contract.md step 4, sakalmaster mode — the SECOND judge.
+# After merge, sakal-verify resolves the linked app's citations against the
+# real tree; a merge that moved/renamed a cited symbol breaks a verified claim
+# and this job goes red. AC status is DERIVED from citations — nothing an
+# executor asserts can set it (invariant 3).
 #
-# What it will do
-#   The second judge of the GATE in integrated mode (docs/task-contract.md
-#   step 4): after merge, run SakalMaster's citation verifier (sakal-verify)
-#   so AC status is DERIVED from citations resolving against real source
-#   files. The executor's claim that an AC is satisfied has zero direct
-#   effect — agents never verify their own claims (contract invariant 3).
-#   Talks to SakalMaster over REST: token-exchange → PostgREST.
+# The sakal-verify CLI is not published to npm (deliberate — see SakalMaster
+# docs/ci/agent-runs.md), so this workflow checks out the SakalMaster repo and
+# builds the CLI, then runs it against the CALLER's checkout. The SakalMaster
+# checkout needs a read token (cross-repo private checkout — the built-in
+# GITHUB_TOKEN cannot do it): secret SAKALMASTER_READ_TOKEN.
 #
-# How callers will use it (trigger lives in the CALLER repo, never here):
+# How a repo calls it (trigger lives in the caller):
+#   name: sakal-verify
 #   on:
 #     push: { branches: [main] }
+#   permissions:
+#     contents: read
 #   jobs:
 #     verify:
 #       uses: sakal-dev/automation/.github/workflows/verify.yml@v1
-#       with: { project: ..., app: ... }
+#       with: { app: garage }
 #       secrets: inherit
 #
-# Intended workflow_call inputs: project, app, SakalMaster base URL
-# Intended secrets: SAKAL_TOKEN (org-level)
-#
-# Review findings folded in (garage session, accepted):
-#   1. CALLERS MUST DECLARE permissions: — exact block decided when this is
-#      implemented; silent 403s otherwise.
-#   3. Consumes the ci_check_name input (default analyze-and-test), same
-#      named-check design as automerge.yml.
+# Required caller secrets (see SakalMaster docs/ci/sakal-verify.yml):
+#   SAKAL_TOKEN · SAKAL_SUPABASE_URL · SAKAL_SUPABASE_PUBLISHABLE_KEY ·
+#   SAKAL_PROJECT · SAKALMASTER_READ_TOKEN
 # =============================================================================
 name: verify
 
 on:
   workflow_call:
-    # inputs/secrets declared when the sakal source is wired — see header
+    inputs:
+      app:
+        description: The SakalMaster app key linked to this repo (e.g. garage)
+        type: string
+        required: true
+      sakalmaster_repo:
+        description: Where the SakalMaster monorepo (and its CLI) lives
+        type: string
+        default: sakal-dev/sakalmaster
+      sakalmaster_ref:
+        description: Ref of the SakalMaster repo to build the CLI from
+        type: string
+        default: main
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
 
 jobs:
-  stub:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
     steps:
-      - name: Not implemented
+      - name: Checkout this repo (the tree citations resolve against)
+        uses: actions/checkout@v4
+        with:
+          path: workspace
+
+      - name: Checkout SakalMaster (the CLI source)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.sakalmaster_repo }}
+          ref: ${{ inputs.sakalmaster_ref }}
+          token: ${{ secrets.SAKALMASTER_READ_TOKEN }}
+          path: sakalmaster
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: sakalmaster/pnpm-lock.yaml
+
+      - name: Build the sakal-verify CLI
+        working-directory: sakalmaster
         run: |
-          echo "::error::verify.yml is a stub — wired when the sakal source lands (migration step 4)"
-          exit 1
+          pnpm install --frozen-lockfile
+          pnpm --filter @sakalmaster/cli build
+
+      - name: Verify citations
+        run: node sakalmaster/apps/cli/dist/verify.js "$GITHUB_WORKSPACE/workspace"
+        env:
+          SAKAL_SUPABASE_URL: ${{ secrets.SAKAL_SUPABASE_URL }}
+          SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SAKAL_SUPABASE_PUBLISHABLE_KEY }}
+          SAKAL_TOKEN: ${{ secrets.SAKAL_TOKEN }}
+          SAKAL_PROJECT: ${{ secrets.SAKAL_PROJECT }}
+          SAKAL_APP: ${{ inputs.app }}

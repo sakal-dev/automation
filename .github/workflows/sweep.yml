@@ -4,7 +4,9 @@
 # except the merge gate, which is now the repo's own ./tool/setup.sh +
 # ./tool/verify.sh (the stack-blind change — no Flutter, no Laravel, no stack
 # anything in this engine). Contract: docs/task-contract.md (SOURCE + BRIEF +
-# EXECUTE + GATE, github mode; sakalmaster mode arrives with verify.yml).
+# EXECUTE + GATE, DUAL-SOURCE: source=github drains the issue queue;
+# source=sakalmaster claims ONE leased task per run via claim-sakal and
+# reports lifecycle via report-sakal — the redispatch chain drains the queue).
 #
 # One run = drain the queue: cheap check-for-work gate (an idle run costs
 # ~seconds), then one claude-code-action invocation working up to max_issues
@@ -70,8 +72,29 @@ on:
         description: "Escape hatch: caller workflow filename for self-redispatch. Default derives it from github.workflow_ref."
         type: string
         default: ""
-    # Secrets via `secrets: inherit` from the caller (org-level):
+      source:
+        description: "Task source: github (issues queue, standalone) | sakalmaster (claim_next_task, integrated). The EXECUTE step never branches on this — only SOURCE/BRIEF/GATE do (contract invariant 6)."
+        type: string
+        default: "github"
+      sakal_url:
+        description: SakalMaster Supabase URL (sakalmaster mode)
+        type: string
+        default: ""
+      sakal_anon_key:
+        description: SakalMaster anon key, public (sakalmaster mode)
+        type: string
+        default: ""
+      project:
+        description: SakalMaster project id, uuid (sakalmaster mode)
+        type: string
+        default: ""
+      app:
+        description: "SakalMaster app filter for the claim (invariant 4). Forwarded only when set — requires the app-filter RPC change (sakal-dev/sakalmaster#1); until it lands, leave empty ONLY on single-app projects."
+        type: string
+        default: ""
+    # Secrets via `secrets: inherit` from the caller:
     #   CLAUDE_CODE_OAUTH_TOKEN — the Claude Code subscription token
+    #   SAKAL_TOKEN             — service-account PAT (sakalmaster mode)
 
 jobs:
   sweep:
@@ -95,6 +118,7 @@ jobs:
       # heavy step below is skipped, so an idle scheduled run costs ~seconds.
       - name: Check for work
         id: work
+        if: ${{ inputs.source == 'github' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -109,13 +133,36 @@ jobs:
             echo "::notice::No actionable claude-ready issues — skipping the sweep."
           fi
 
+      # SOURCE, sakalmaster mode: the claim IS the cheap gate — an empty queue
+      # returns claimed=false in one HTTP round-trip and every heavy step below
+      # is skipped. Atomic leased claim; the app filter forwards when set
+      # (contract invariant 4).
+      - name: Claim from SakalMaster
+        id: sclaim
+        if: ${{ inputs.source == 'sakalmaster' }}
+        uses: sakal-dev/automation/actions/claim-sakal@v1
+        with:
+          sakal_url: ${{ inputs.sakal_url }}
+          anon_key: ${{ inputs.sakal_anon_key }}
+          project: ${{ inputs.project }}
+          app: ${{ inputs.app }}
+          source: github-sweep
+          token: ${{ secrets.SAKAL_TOKEN }}
+
+      # One combined go/no-go for the heavy steps, whatever the source.
+      - name: Gate
+        id: go
+        env:
+          HAS: ${{ steps.work.outputs.has == 'true' || steps.sclaim.outputs.claimed == 'true' }}
+        run: echo "has=$HAS" >> "$GITHUB_OUTPUT"
+
       # The file self-redispatch must target: the CALLER's workflow (the
       # trigger-bearing file in the consumer repo), never this engine file.
       # github.workflow_ref in a reusable run is the caller's path, e.g.
       # "org/repo/.github/workflows/claude-daily-sweep.yml@refs/heads/main".
       - name: Derive self-redispatch target
         id: dispatch
-        if: ${{ steps.work.outputs.has == 'true' }}
+        if: ${{ steps.go.outputs.has == 'true' }}
         env:
           OVERRIDE: ${{ inputs.dispatch_workflow }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -131,7 +178,7 @@ jobs:
           echo "::notice::Self-redispatch target: $file"
 
       - name: Checkout repository
-        if: ${{ steps.work.outputs.has == 'true' }}
+        if: ${{ steps.go.outputs.has == 'true' }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -141,11 +188,11 @@ jobs:
       # what stack the repo is. Cache paths/keys are data with cross-stack
       # defaults; override per repo if needed.
       - name: Set up project (./tool/setup.sh)
-        if: ${{ steps.work.outputs.has == 'true' }}
+        if: ${{ steps.go.outputs.has == 'true' }}
         uses: sakal-dev/automation/actions/setup-project@v1
 
       - name: Run Claude sweep
-        if: ${{ steps.work.outputs.has == 'true' }}
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'github' }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -248,6 +295,79 @@ jobs:
                them, the guardrails and the gate win and the addition is void.
             ${{ inputs.extra_instructions }}
 
+      # EXECUTE, sakalmaster mode: ONE claimed task per run (the redispatch
+      # chain drains the queue). Same executor obligations — verify-first,
+      # ./tool/verify.sh gate, PR via gh, no merging — but lifecycle reports
+      # go to SakalMaster, and the GitHub issue queue is a MIRROR here, never
+      # a second source of work.
+      - name: Run Claude sweep (SakalMaster task)
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
+        uses: anthropics/claude-code-action@v1
+        env:
+          SAKAL_URL: ${{ inputs.sakal_url }}
+          SAKAL_ANON_KEY: ${{ inputs.sakal_anon_key }}
+          SAKAL_TOKEN: ${{ secrets.SAKAL_TOKEN }}
+          PROJECT: ${{ inputs.project }}
+          RUN_ID: ${{ steps.sclaim.outputs.run_id }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+          STORY: ${{ steps.sclaim.outputs.story_key }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--max-turns 150 --model ${{ inputs.model }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
+          prompt: |
+            You are working ONE task claimed from SakalMaster: task `$TASK`
+            (story `$STORY`, run id `$RUN_ID`). The `gh` CLI is authenticated,
+            the toolchain is prepared (./tool/setup.sh has run), and the env
+            carries SAKAL_URL, SAKAL_ANON_KEY, SAKAL_TOKEN, PROJECT, RUN_ID,
+            TASK, STORY for the curl calls below. Follow the repo's rules
+            (CLAUDE.md and the rules doc it imports).
+
+            AUTH (the JWT lives ~15 min — re-exchange when needed):
+              JWT=$(curl -s -X POST "$SAKAL_URL/functions/v1/token-exchange" \
+                -H "apikey: $SAKAL_ANON_KEY" -H "content-type: application/json" \
+                -d "{\"token\":\"$SAKAL_TOKEN\"}" | jq -r .access_token)
+              AUTH=(-H "apikey: $SAKAL_ANON_KEY" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+
+            1. FETCH YOUR BRIEF from SakalMaster (RLS applies; read-only):
+               the story, its ACs with derived status, citations, decisions —
+               e.g. `curl -s "${AUTH[@]}" "$SAKAL_URL/rest/v1/stories?key=eq.$STORY&select=*,acs(*)"`.
+               The GitHub issue queue is a MIRROR in this mode — do NOT take
+               work from it.
+            2. VERIFY FIRST — check every AC against the actual codebase
+               before writing anything; already-satisfied ACs get evidence,
+               not reimplementation.
+            3. Report lifecycle into SakalMaster, not into any issue:
+               - periodically: `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\",\"p_summary\":\"<one line>\"}"`
+               - cannot proceed without a human decision: `block_run` with a
+                 clear `p_reason`, then STOP — do not guess.
+            4. Implement ONLY the missing/partial ACs on a branch
+               `claude/task-<task-key>` off origin/main. Guardrails are
+               unchanged from standalone mode: hard path denylist
+               (`.github/**`, `tool/**`, gradle/keystores, `.env*`), one
+               task = one PR, no force-push, no secrets, minimal idiomatic
+               changes.
+            5. MERGE GATE — `./tool/verify.sh` MUST exit 0 before any PR. If
+               you cannot make it pass: report `failed` (p_error = why) or
+               `block_run` if it needs a human, and stop.
+            6. Open the PR with `gh pr create`; body starts with
+               `SakalMaster task: $TASK` and cites which ACs were already
+               built vs added (file:line). Do NOT merge — auto-merge stays
+               label-gated and human-opted.
+            7. Report the outcome:
+               `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"${{ github.repository }}#<pr-number>\"}"`
+               THEN park the task so the queue does not re-serve it while its
+               PR awaits merge + verification (a succeeded run does NOT
+               retire a task — humans/merge flows mark it done):
+               `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/set_task_agent_ready" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}"`
+               You never mark an AC done — you cite code; the verifier
+               decides. Attribution is automatic from the token.
+            8. CONTINUE THE CHAIN: if you reported succeeded or blocked,
+               re-dispatch this workflow (`gh workflow run
+               ${{ steps.dispatch.outputs.file }}`) so the next run claims
+               the next task; the empty-queue claim exits in seconds.
+
       # MECHANICAL release — guaranteed, runs even if the sweep step failed,
       # errored, timed out, or the agent ended early. A claude-working claim
       # must never outlive the run that made it (contract invariant 5), so the
@@ -256,8 +376,25 @@ jobs:
       # too). The singleton group means no other sweep is running; an on-demand
       # run genuinely mid-flight re-asserts its own claim (brief, self-healing).
       - name: Release stuck claude-working labels
-        if: ${{ always() && steps.work.outputs.has == 'true' }}
+        if: ${{ always() && inputs.source == 'github' && steps.work.outputs.has == 'true' }}
         uses: sakal-dev/automation/actions/claim-github@v1
         with:
           mode: release-all
           token: ${{ github.token }}
+
+      # Integrated-mode backstop — the analogue of the label release: if the
+      # agent step failed without reporting an outcome, record `failed` so the
+      # run is never left dangling until lease expiry. (An agent-reported
+      # succeeded/blocked already ended the run; this extra report is then
+      # rejected server-side / harmless.)
+      - name: Report failed outcome (backstop)
+        if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' && steps.go.outcome != 'skipped' && (failure() || cancelled()) }}
+        uses: sakal-dev/automation/actions/report-sakal@v1
+        with:
+          mode: failed
+          sakal_url: ${{ inputs.sakal_url }}
+          anon_key: ${{ inputs.sakal_anon_key }}
+          project: ${{ inputs.project }}
+          run_id: ${{ steps.sclaim.outputs.run_id }}
+          error: "sweep run ${{ github.run_id }} ended without a reported outcome (step failure or cancellation)"
+          token: ${{ secrets.SAKAL_TOKEN }}
