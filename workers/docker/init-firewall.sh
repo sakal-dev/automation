@@ -26,18 +26,24 @@ if [ -n "${SAKAL_URL:-}" ]; then
 fi
 ALLOW_DOMAINS="$ALLOW_DOMAINS ${EXTRA_ALLOW_DOMAINS:-}"
 
-UPSTREAM=$(grep -m1 '^nameserver' /etc/resolv.conf | awk '{print $2}')
-[ -z "$UPSTREAM" ] && UPSTREAM=1.1.1.1
+# Real external resolvers, not Docker's embedded DNS (quirky with uncommon
+# query types); dnsmasq MUST stay uid 0 — it normally drops privileges, and
+# the firewall below only lets ROOT talk to upstream :53 (found live: the
+# privilege drop silently killed every post-TTL re-resolution, taking the
+# Anthropic API down mid-run once the seed cache expired).
+UPSTREAM1=1.1.1.1; UPSTREAM2=8.8.8.8
 
 ipset destroy allowed 2>/dev/null || true
 ipset create allowed hash:ip timeout 3600   # entries refresh on every lookup
 
 # dnsmasq: the only resolver; every allowlisted answer lands in the ipset.
 {
+  echo "user=root"
   echo "listen-address=127.0.0.1"
   echo "bind-interfaces"
   echo "no-resolv"
-  echo "server=$UPSTREAM"
+  echo "server=$UPSTREAM1"
+  echo "server=$UPSTREAM2"
   for d in $ALLOW_DOMAINS; do echo "ipset=/$d/allowed"; done
 } > /etc/dnsmasq.d/allowlist.conf
 dnsmasq --conf-dir=/etc/dnsmasq.d
