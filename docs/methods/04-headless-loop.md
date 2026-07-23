@@ -42,8 +42,22 @@ container are the actual permission system.
   SIGKILL and the release never fires. (The loop now does this.)
 - Cost notes + per-task wall time: pending the real drain.
 
-### Deferred — the two-issue drain
+### 2026-07-23 — live drain, iteration 1 (local Docker): ENGINE DEFECT FOUND & FIXED
 
-Needs `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/sakal-worker.env` (or the local
-test env). Then: point at a repo queue with 2 small real issues, one
-iteration each, record wall time + token cost + failure modes vs method 3.
+First real autonomous task (owner #5, tests chore). The agent behaved
+textbook under failure: verified first (confirmed the tests genuinely don't
+exist), hit the blocker, REFUSED to open a gateless PR (RULES §3), blocked
+with a precise diagnosis on the issue, cleaned its branch. 12.4 min wall,
+$1.82, 57 turns — an honest failure, cheaper than a dishonest success.
+
+**The defect (the whole point of live drains):** firewall v1 resolved the
+allowlist ONCE at container start into a static ipset. Anycast CDNs
+(`storage.googleapis.com`, the Dart SDK host) rotate IPs between that
+resolve and the actual connections → Flutter install timed out despite the
+domain being "allowed". **Fix (v2): dnsmasq is the container's only
+resolver with `ipset=/domain/allowed` — every DNS answer enters the set at
+resolution time, so a connection can never race its own DNS.** Verified:
+repeated CDN fetches all pass; non-allowlisted still dropped; agent DNS only
+via loopback (upstream :53 is root/dnsmasq-only).
+
+### 2026-07-23 — live drain, iterations 1–2 (v2 sandbox): see below
