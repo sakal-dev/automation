@@ -54,7 +54,14 @@ async function runOneTask(): Promise<boolean> {
   let outcome = "failed";
   let detail = "terminated before outcome";
   const abort = new AbortController();
-  const onTerm = () => abort.abort(new Error("SIGTERM"));
+  const onTerm = () => {
+    // Release FIRST, fire-and-forget: the SDK's abort can take longer than a
+    // stop grace period to unwind (observed live: SIGKILL beat the finally
+    // and the claim stuck). A duplicate finish later is harmless — REST
+    // label-DELETE 404s, sakal report_run rejects a second outcome.
+    void lifecycle("finish", ["failed", "SIGTERM fast-release"], taskEnv).catch(() => {});
+    abort.abort(new Error("SIGTERM"));
+  };
   process.once("SIGTERM", onTerm);
   process.once("SIGINT", onTerm);
 
@@ -80,12 +87,24 @@ async function runOneTask(): Promise<boolean> {
             hooks: [async (input: any) => {
               const t = input.tool_name as string;
               const ti = (input.tool_input ?? {}) as Record<string, unknown>;
+              // The denylist forbids CREATE/MODIFY/DELETE — never reading or
+              // executing (the gate itself lives in tool/**). First live probe
+              // run blocked `./tool/setup.sh` execution and Reads: false
+              // positives that broke the executor. Enforce write tools only;
+              // for Bash, require a write-shaped verb near the denied path
+              // (heuristic defence-in-depth — the prompt rule stays primary).
               const paths: string[] = [];
-              if (typeof ti.file_path === "string") paths.push(ti.file_path);
-              if (t === "Bash" && typeof ti.command === "string")
-                paths.push(...(ti.command.match(/[\w./~-]+/g) ?? []));
+              if (["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(t) && typeof ti.file_path === "string")
+                paths.push(ti.file_path);
+              if (t === "Bash" && typeof ti.command === "string") {
+                const cmd = ti.command;
+                if (/(^|[;&|]\s*)(rm|mv|cp|tee|truncate|sed\s+-i|chmod|ln|install)\b|>{1,2}\s*\S/.test(cmd))
+                  paths.push(...(cmd.match(/[\w./~-]+/g) ?? []));
+              }
               const hit = paths.find((p) => denied(p.replace(repoDir + "/", "")));
               if (hit) {
+                // the proof line the methods log wants: the denylist firing as CODE
+                console.log(`[hook] BLOCKED ${t} -> ${hit} (denylist, contract invariant 7)`);
                 return {
                   decision: "block" as const,
                   stopReason: `denylist: ${hit} is untouchable (contract invariant 7)`,
