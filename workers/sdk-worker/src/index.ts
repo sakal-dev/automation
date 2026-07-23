@@ -53,6 +53,7 @@ async function runOneTask(): Promise<boolean> {
 
   let outcome = "failed";
   let detail = "terminated before outcome";
+  let sawSuccess = false;
   const abort = new AbortController();
   const onTerm = () => {
     // Release FIRST, fire-and-forget: the SDK's abort can take longer than a
@@ -125,7 +126,9 @@ async function runOneTask(): Promise<boolean> {
     })) {
       if (message.type === "result") {
         // the SDK's terminal message; the gate below decides, not the agent
-        console.log(`[agent] result: ${"subtype" in message ? message.subtype : "done"}`);
+        const sub = "subtype" in message ? (message as any).subtype : "done";
+        console.log(`[agent] result: ${sub}`);
+        if (sub === "success") sawSuccess = true;
       }
     }
 
@@ -139,6 +142,22 @@ async function runOneTask(): Promise<boolean> {
     else { outcome = "failed"; detail = "gate green but no PR was opened"; }
   } catch (err: any) {
     if (abort.signal.aborted) { outcome = "failed"; detail = "cancelled (SIGTERM)"; }
+    else if (sawSuccess) {
+      // A late stream error after a successful result must not override
+      // reality (observed live: agent succeeded, PR open, then the CLI
+      // exited 1 → the wrapper mislabelled the task blocked). Verify like
+      // the normal path: gate + PR presence decide.
+      try {
+        const repoDir = join(WORKDIR, "repo");
+        await sh("bash", ["-c", "./tool/setup.sh >/dev/null 2>&1 && ./tool/verify.sh"], { cwd: repoDir });
+        const { stdout: branch } = await sh("git", ["branch", "--show-current"], { cwd: repoDir });
+        const { stdout: pr } = await sh("gh", [
+          "pr", "list", "-R", process.env.REPO!, "--head", branch.trim(), "--json", "number", "-q", ".[0].number",
+        ]);
+        if (pr.trim()) { outcome = "succeeded"; detail = `${process.env.REPO}#${pr.trim()} (late stream error ignored: ${err?.message ?? err})`; }
+        else { outcome = "failed"; detail = `success result but no PR; late stream error: ${err?.message ?? err}`; }
+      } catch { outcome = "blocked"; detail = `gate failed after success result; stream error: ${err?.message ?? err}`; }
+    }
     else { outcome = "blocked"; detail = `needs a human look: ${err?.message ?? err}`; }
   } finally {
     clearInterval(hb);
