@@ -32,11 +32,14 @@ claim() {
     # oldest actionable claude-ready issue; label-claim is check-then-act —
     # the small race is accepted in github mode (the DB lease in sakal mode
     # is exact); a lost race self-heals via claude-done/release-all.
-    TASK_REF=$(gh issue list -R "$REPO" --state open --label claude-ready \
-      --json number,labels --jq \
-      '[.[] | select(([.labels[].name] | index("claude-blocked") or index("claude-working")) | not)] | sort_by(.number) | .[0].number // empty')
+    # REST throughout (gh api), NOT `gh issue list/edit`: those are GraphQL,
+    # and a shared user PAT's GraphQL pool drains under heavy sweep days —
+    # observed live 2026-07-23: a release retried 4 times into an empty pool
+    # and the claim stuck. REST rides a separate, roomier limit.
+    TASK_REF=$(gh api "repos/$REPO/issues?state=open&labels=claude-ready&per_page=100" --jq \
+      '[.[] | select(.pull_request | not) | select(([.labels[].name] | index("claude-blocked") or index("claude-working")) | not)] | sort_by(.number) | .[0].number // empty')
     [ -z "$TASK_REF" ] && return 1
-    gh issue edit "$TASK_REF" -R "$REPO" --add-label claude-working >/dev/null
+    gh api -X POST "repos/$REPO/issues/$TASK_REF/labels" -f "labels[]=claude-working" >/dev/null
     echo "[claim] github issue #$TASK_REF"
   else
     local payload='{"p_project":"'"$PROJECT"'","p_source":"manual","p_lease_seconds":'"${LEASE_SECONDS:-1800}"'}'
@@ -90,20 +93,21 @@ finish() {
   if [ "$SOURCE" = "github" ]; then
     case "$outcome" in
       blocked)
-        gh issue comment "$TASK_REF" -R "$REPO" --body "Blocked: $detail" >/dev/null 2>&1 || true
-        gh issue edit "$TASK_REF" -R "$REPO" --add-label claude-blocked >/dev/null 2>&1 || true ;;
+        gh api -X POST "repos/$REPO/issues/$TASK_REF/comments" -f body="Blocked: $detail" >/dev/null 2>&1 || true
+        gh api -X POST "repos/$REPO/issues/$TASK_REF/labels" -f "labels[]=claude-blocked" >/dev/null 2>&1 || true ;;
     esac
-    # the label release — unconditional, idempotent, every path, WITH RETRY:
-    # concurrent mutations from one token (e.g. two replicas stopped in
-    # parallel) can hit GitHub's secondary rate limit and silently fail —
-    # observed in the 2-replica fleet experiment (2026-07-22). Per-replica
-    # tokens avoid the collision; the retry covers whatever remains.
+    # the label release — unconditional, idempotent, every path, WITH RETRY,
+    # via REST (a stuck release was observed live when the GraphQL pool was
+    # empty: 4 retries into the same dead pool). REST DELETE 404s harmlessly
+    # when the label is already gone; secondary-rate collisions (two replicas
+    # stopping in parallel on one token) still make per-replica tokens the
+    # rule — the retry covers whatever remains.
     if [ -n "${TASK_REF:-}" ]; then
       for backoff in 0 3 8 20; do
         sleep "$backoff"
-        if gh issue edit "$TASK_REF" -R "$REPO" --remove-label claude-working >/dev/null 2>&1; then break; fi
-        # already-absent label also lands here on some gh versions — verify:
-        gh issue view "$TASK_REF" -R "$REPO" --json labels -q '.labels[].name' 2>/dev/null | grep -qx claude-working || break
+        if gh api -X DELETE "repos/$REPO/issues/$TASK_REF/labels/claude-working" >/dev/null 2>&1; then break; fi
+        # a 404 (already absent) exits non-zero — verify before retrying:
+        gh api "repos/$REPO/issues/$TASK_REF" --jq '.labels[].name' 2>/dev/null | grep -qx claude-working || break
       done
     fi
   else
