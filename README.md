@@ -93,33 +93,31 @@ manual YAML):
 3. **The plugin** — install this repo as a Claude Code plugin marketplace and
    the install/operate/dispatch skills come along.
 
-### Secrets — per repo today (Free plan), org-level if we upgrade
+### Secrets — org-level (live since the Team upgrade, 2026-07-23)
 
 `secrets: inherit` in every caller passes whatever secrets the calling repo
 can see — repo-level or org-level, the engine doesn't care.
 
-**Current layout: repo-level `CLAUDE_CODE_OAUTH_TOKEN` in each consumer
-repo.** The `sakal-dev` org is on the GitHub Free plan, and org secrets are
-not visible to private repos on Free — so the "one org secret" design
-(NOTES.md §4) is parked until/unless the org upgrades to Team. In practice
-this costs nothing at onboarding time:
+**Current layout: ONE org-level `CLAUDE_CODE_OAUTH_TOKEN`** (NOTES.md §4's
+one-rotation-point design, live), currently visible to **all private
+repos**. Repo-level copies were deleted at cutover — a repo-level secret
+with the same name would OVERRIDE the org one, so don't recreate them
+(`/install-github-app` in a new repo may add one; delete it after, or skip
+that step of the flow since the org secret already covers the repo).
 
-- **New repo:** run `/install-github-app` from Claude Code in that repo — it
-  installs the GitHub App AND creates the repo's `CLAUDE_CODE_OAUTH_TOKEN`
-  secret automatically. No manual secret handling at all.
-- **Manual alternative:** `claude setup-token` (browser login, prints
-  `sk-ant-oat01-…`), then
-  `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R sakal-dev/<repo>`.
-- **Rotation** is per-repo: re-run either of the above in each consumer repo
-  (`gh secret list -R <repo>` to audit which repos carry it).
+- **New repo:** nothing to do for this secret (all-private visibility). If
+  visibility is ever tightened to *Selected repositories* — the safer
+  posture, since workflows in agent-worked repos are semi-trusted — then
+  onboarding = tick the repo in the org secret's access list (or the
+  `gh api -X PUT orgs/sakal-dev/actions/secrets/.../repositories/<id>`
+  one-liner).
+- **Rotation:** `claude setup-token` → paste into the org secret. One place.
+- **Separate identities stay separate:** VPS worker / fleet tokens are
+  per-host, per-replica credentials (a correctness rule — see
+  `docs/methods/07`), not this org secret. `SAKAL_TOKEN` follows the same
+  org-level pattern when integrated mode goes live.
 
-**If the org ever upgrades to Team:** create the secret once at org level
-with *Selected repositories* visibility (workflows in agent-worked repos are
-semi-trusted — grant read access explicitly, never `all`), grant each
-consumer repo access, then delete the repo-level copies. A repo-level secret
-with the same name overrides the org one, so the migration is zero-downtime:
-the org secret takes over the moment a repo copy is deleted. The token value
-itself is never written down anywhere but the secret store.
+The token value is never written down anywhere but the secret store.
 
 ## Background
 
