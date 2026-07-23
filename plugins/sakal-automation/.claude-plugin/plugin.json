@@ -1,5 +1,5 @@
 {
   "name": "sakal-automation",
-  "version": "0.1.0",
-  "description": "Agent automation for sakal-dev repos: automation-install onboards a repo end to end (<30 min, no hand-written YAML); automation-operate runs the queue day to day; automation-dispatch (draft) hands briefs to cloud executors. Engine: sakal-dev/automation reusable workflows @v1."
+  "version": "0.2.0",
+  "description": "Agent automation for sakal-dev repos: automation-install onboards a repo end to end (<30 min, no hand-written YAML); automation-operate runs the queue day to day; automation-dispatch (draft) hands briefs to cloud executors; sakal-import turns a repo's specs and open issues into SakalMaster journeys/epics/stories/ACs/bugs/tasks (idempotent, re-runnable). Engine: sakal-dev/automation reusable workflows @v1."
 }
