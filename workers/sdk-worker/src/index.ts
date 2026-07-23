@@ -97,9 +97,16 @@ async function runOneTask(): Promise<boolean> {
               if (["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(t) && typeof ti.file_path === "string")
                 paths.push(ti.file_path);
               if (t === "Bash" && typeof ti.command === "string") {
-                const cmd = ti.command;
-                if (/(^|[;&|]\s*)(rm|mv|cp|tee|truncate|sed\s+-i|chmod|ln|install)\b|>{1,2}\s*\S/.test(cmd))
-                  paths.push(...(cmd.match(/[\w./~-]+/g) ?? []));
+                // Check ONLY write-verb arguments and redirect TARGETS —
+                // checking every token flagged `./tool/setup.sh > /tmp/log`
+                // because of the harmless redirect (live false positive #2).
+                for (const seg of (ti.command as string).split(/[;&|]+/)) {
+                  const s = seg.trim();
+                  const m = s.match(/^(?:sudo\s+)?(rm|mv|cp|tee|truncate|chmod|ln|install)\b(.*)$/);
+                  if (m) paths.push(...(m[2].match(/[\w./~-]+/g) ?? []));
+                  if (/^sed\b/.test(s) && /\s-i\b/.test(s)) paths.push(...(s.match(/[\w./~-]+/g) ?? []));
+                  for (const r of s.matchAll(/>{1,2}\s*([\w./~-]+)/g)) paths.push(r[1]);
+                }
               }
               const hit = paths.find((p) => denied(p.replace(repoDir + "/", "")));
               if (hit) {
