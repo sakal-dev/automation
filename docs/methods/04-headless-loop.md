@@ -1,8 +1,9 @@
 # Method 4 — Headless loop (VPS)
 
-**Status: built and locally verified (image, firewall, kill test). The
-two-real-issue drain is deferred until a worker host holds a
-`CLAUDE_CODE_OAUTH_TOKEN` (human-minted via `claude setup-token`).**
+**Status: LIVE-PROVEN (2026-07-23, local Docker host): 2/2 real issues
+drained end to end — PRs #9 and #10 on sakalpos-owner, gate run by the
+loop, claims released. Three engine defects found and fixed on the way
+(the point of live drains). VPS deployment: recipe below, unchanged.**
 
 ## What it is
 
@@ -60,4 +61,30 @@ resolution time, so a connection can never race its own DNS.** Verified:
 repeated CDN fetches all pass; non-allowlisted still dropped; agent DNS only
 via loopback (upstream :53 is root/dnsmasq-only).
 
-### 2026-07-23 — live drain, iterations 1–2 (v2 sandbox): see below
+### 2026-07-23 — live drain complete (v3 sandbox): 2/2 SUCCEEDED
+
+Real queue: sakalpos-owner test-debt chores (#7, #5 — real, decision-free).
+
+| | iter 1 (#7 → PR #9) | iter 2 (#5 → PR #10) |
+|---|---|---|
+| wall time | 18.7 min | 14.9 min |
+| cost | $1.31 | $2.64 |
+| turns | 49 | 70 |
+| outcome | PR, gate green | PR, gate green |
+
+Two more defects found live before the successes (both fixed + committed):
+**(2) dnsmasq privilege-drop** silently killed post-TTL re-resolution (the
+uid-scoped :53 rule) — the Anthropic API vanished mid-run once the seed
+cache expired; fix: `user=root` + real upstreams. **(3) GraphQL-pool label
+releases**: `gh issue edit` is GraphQL; a heavy sweep day drained the shared
+PAT's pool and a release retried 4× into it — worker lifecycle label ops
+now REST end to end. Also observed: `claude-done` heals a stuck claim at
+PR-open (designed redundancy paying off), and worker PRs author as the PAT
+owner — use a dedicated machine-account PAT per worker on the VPS.
+
+**Verdict vs method 3:** same engine, same gate, same PR quality; the loop
+adds ~zero runner-queue latency and full host control, at the cost of
+owning the sandbox (three of three defects found were sandbox/limits, not
+agent behaviour). For steady queues it complements the cron sweep;
+per-task agent cost is the same order (~$1.3–2.6 vs the sweep's ~$1.8/issue
+observed).

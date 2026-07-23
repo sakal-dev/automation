@@ -13,14 +13,14 @@ cmd="${1:?claim|brief|heartbeat|finish}"; shift || true
 case "$cmd" in
   claim)
     if claim; then
-      jq -n --arg t "$TASK_REF" --arg r "${RUN_ID:-}" --arg s "${STORY_KEY:-}" \
+      jq -cn --arg t "$TASK_REF" --arg r "${RUN_ID:-}" --arg s "${STORY_KEY:-}" \
         '{claimed:true, task_ref:$t, run_id:$r, story_key:$s}'
     else
-      jq -n '{claimed:false}'
+      jq -cn '{claimed:false}'
     fi ;;
   brief)
     TASK_REF="${TASK_REF:?}" ; brief
-    jq -n --arg f "$BRIEF_FILE" '{brief_file:$f}' ;;
+    jq -cn --arg f "$BRIEF_FILE" '{brief_file:$f}' ;;
   heartbeat)
     heartbeat; echo '{}' ;;
   finish)
