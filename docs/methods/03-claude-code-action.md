@@ -49,9 +49,17 @@ sakalpos-owner onboarded by the `automation-install` procedure:
 **14m11s** from preflight to merged onboarding PR (budget: 30m), no
 hand-written YAML. Pre-flight local gate: analyze clean, 58/58 tests.
 Pinned-toolchain gate proven on the PR's own CI (cold `setup-project`
-install). Smoke issue #2 queued; **the sweep dispatch waits on the repo's
-`CLAUDE_CODE_OAUTH_TOKEN`** (run `/install-github-app` there — the one step
-only a human can do).
+install).
+
+**Smoke verify (2026-07-23, after the human's `/install-github-app`):
+PASSED end to end.** The delayed cron sweep (queued from the secretless
+night) claimed #2 at 02:55, verified the ACs, opened docs-only PR #4
+(`Closes #2` + the RULES §9 changelog entry — honored unprompted),
+`claude-done` flipped the labels, and the chain re-dispatch found the
+empty queue and exited in seconds. Bonus proof: a manually dispatched run
+queued behind the scheduled one in the singleton concurrency group — two
+trigger sources, zero collision. PR #4 merged; #2 closed. The full
+onboard→queue→drain loop is live on a second repo.
 
 ### 2026-07-22 — sakal source (session 4) — integrated seams verified locally
 
