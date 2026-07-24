@@ -6,9 +6,11 @@ seven execution methods, and runs in two modes: **standalone** (GitHub is the
 queue — nothing else needed) and **integrated** (SakalMaster is the queue and
 the judge).
 
-> **Current state: skeleton.** The contract and every stub are real; the
-> implementation arrives session by session (garage extraction next). Every
-> file documents what it will become.
+> **Current state: LIVE.** Engine v2 (OIDC, zero repo secrets) runs two
+> production repos; the integrated loop is proven end to end (a merged agent
+> PR flipped a SakalMaster AC to `enforced` in 9 seconds — see
+> `docs/methods/03`). The lab notebook (`docs/methods/`) records every
+> experiment behind it.
 
 ## The contract, in five lines
 
@@ -78,15 +80,15 @@ manual YAML):
      actions: write
    jobs:
      sweep:
-       uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+       uses: sakal-dev/automation/.github/workflows/sweep.yml@v2
        secrets: inherit
    ```
 
-   Versioning follows the actions-ecosystem convention:
-   **`v1` is a floating major tag** — it always points at the latest
-   compatible engine and is moved on each release; **immutable `v1.x.y` tags**
-   mark the releases themselves (first cut: `v1.0.0` at garage parity).
-   Callers ride `@v1`; pin `@v1.x.y` only if a repo needs to freeze.
+   Versioning follows the actions-ecosystem convention: **`v2` is the
+   floating major tag** (moved on each release; internal action refs ride
+   with it); immutable `v2.x.y` tags mark releases. The v1 line is frozen at
+   `v1.1.0` (last release accepting the deprecated input names). Callers
+   ride `@v2`; pin `@v2.x.y` only to freeze.
 2. **Two scripts** — `tool/setup.sh` and `tool/verify.sh`, owned by the
    project repo. They are the only place stack knowledge lives; the engine is
    stack-blind. This is the whole Flutter/Laravel/React/Electron answer.
@@ -114,8 +116,11 @@ that step of the flow since the org secret already covers the repo).
 - **Rotation:** `claude setup-token` → paste into the org secret. One place.
 - **Separate identities stay separate:** VPS worker / fleet tokens are
   per-host, per-replica credentials (a correctness rule — see
-  `docs/methods/07`), not this org secret. `SAKAL_TOKEN` follows the same
-  org-level pattern when integrated mode goes live.
+  `docs/methods/07`), not this org secret.
+- **Integrated mode needs NO secret at all**: CI authenticates to SakalMaster
+  via GitHub OIDC (`permissions: id-token: write`); the exchange maps the
+  signed repository claim to project + app server-side. `SAKAL_TOKEN` PATs
+  exist only as the non-Actions fallback (VPS workers).
 
 The token value is never written down anywhere but the secret store.
 

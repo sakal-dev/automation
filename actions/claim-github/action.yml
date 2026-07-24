@@ -68,11 +68,13 @@ runs:
       run: |
         set -euo pipefail
         if [ -z "$N" ]; then echo "::error::claim-github mode=claim requires an issue number"; exit 1; fi
-        if gh issue view "$N" --repo "$GITHUB_REPOSITORY" --json labels -q '.labels[].name' | grep -qx "$LABEL"; then
+        # REST, not gh issue view/edit (GraphQL): a drained GraphQL pool ate
+        # label writes silently in the live drains — REST rides its own limit.
+        if gh api "repos/$GITHUB_REPOSITORY/issues/$N" --jq '.labels[].name' | grep -qx "$LABEL"; then
           echo "already-owned=true" >> "$GITHUB_OUTPUT"
           echo "::notice::#$N already has $LABEL — another run owns it; standing down."
         else
-          gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --add-label "$LABEL"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$N/labels" -f "labels[]=$LABEL" >/dev/null
           echo "claimed=true" >> "$GITHUB_OUTPUT"
           echo "::notice::Claimed #$N with $LABEL."
         fi
@@ -86,7 +88,7 @@ runs:
         LABEL: ${{ inputs.label }}
       run: |
         if [ -z "$N" ]; then echo "::error::claim-github mode=release requires an issue number"; exit 1; fi
-        gh issue edit "$N" --repo "$GITHUB_REPOSITORY" --remove-label "$LABEL" || true
+        gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$N/labels/$LABEL" >/dev/null 2>&1 || true
 
     - name: Release all
       if: ${{ inputs.mode == 'release-all' }}
@@ -96,9 +98,9 @@ runs:
         LABEL: ${{ inputs.label }}
       run: |
         set -uo pipefail
-        for n in $(gh issue list -R "$GITHUB_REPOSITORY" --state all --label "$LABEL" \
-                     --json number -q '.[].number' 2>/dev/null || true); do
-          gh issue edit "$n" -R "$GITHUB_REPOSITORY" --remove-label "$LABEL" >/dev/null 2>&1 \
+        for n in $(gh api "repos/$GITHUB_REPOSITORY/issues?state=all&labels=$LABEL&per_page=100" \
+                     --jq '.[].number' 2>/dev/null || true); do
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$n/labels/$LABEL" >/dev/null 2>&1 \
             && echo "Released stuck $LABEL on #$n." || true
         done
 

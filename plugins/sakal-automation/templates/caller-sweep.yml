@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   sweep:
-    uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+    uses: sakal-dev/automation/.github/workflows/sweep.yml@v2
     with:
       extra_instructions: |
         <EXTRA_INSTRUCTIONS>

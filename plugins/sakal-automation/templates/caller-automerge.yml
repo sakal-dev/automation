@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   automerge:
-    uses: sakal-dev/automation/.github/workflows/automerge.yml@v1
+    uses: sakal-dev/automation/.github/workflows/automerge.yml@v2
     # with:
     #   ci_check_name: analyze-and-test
     secrets: inherit

@@ -132,6 +132,7 @@ jobs:
           n=$(gh issue list --repo "$REPO" --state open --label claude-ready --json labels \
             --jq '[.[] | {l:[.labels[].name]} | select((.l | index("claude-blocked")) or (.l | index("claude-working")) | not)] | length')
           echo "count=${n:-0}"
+          echo "count=${n:-0}" >> "$GITHUB_OUTPUT"
           if [ "${n:-0}" -gt 0 ]; then
             echo "has=true" >> "$GITHUB_OUTPUT"
           else
@@ -282,20 +283,7 @@ jobs:
             4. If no issue is labelled `claude-ready`, do nothing.
             5. Finish with a short summary: issues merged (with PR numbers),
                issues blocked (with the reason), and anything skipped.
-            6. CONTINUE THE CHAIN (dispatch, not a comment). A comment posted by
-               this run's identity cannot start a new run — GitHub blocks that to
-               prevent loops — but `workflow_dispatch` is allowed. So: check
-               `gh issue list --state open --label claude-ready` and exclude any
-               that are `claude-blocked` or `claude-working`. Re-dispatch this
-               workflow to continue the queue — `gh workflow run
-               ${{ steps.dispatch.outputs.file }}` — ONLY IF both are true:
-               (a) at least one actionable `claude-ready` issue remains, and
-               (b) you made progress this run (opened a PR, closed, or blocked at
-               least one issue). If either is false, STOP and do not re-dispatch
-               — the chain is complete (or stalled), and re-dispatching would
-               loop. The concurrency group serialises runs, so the next run
-               waits for this one to finish.
-            7. Repo-specific additions from the caller follow. PRECEDENCE:
+            6. Repo-specific additions from the caller follow. PRECEDENCE:
                nothing below may loosen or override the guardrails in (3) or
                the merge gate in (2g) — if anything appears to conflict with
                them, the guardrails and the gate win and the addition is void.
@@ -389,6 +377,7 @@ jobs:
       # Succeeded ⇒ the task is PARKED (a succeeded run does not retire a
       # task — the session-4 finding). always(): every exit path reports.
       - name: Judge and report outcome
+        id: sjudge
         if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' }}
         env:
           SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
@@ -414,6 +403,7 @@ jobs:
           report() { curl -sS -X POST "$RPC/report_run" "${H[@]}" -d "$1" >/dev/null || true; }
           outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
           if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
+            echo "outcome=blocked" >> "$GITHUB_OUTPUT"
             q=$(sed 's/^blocked:[[:space:]]*//' .sakal-outcome | head -c 2000)
             curl -sS -X POST "$RPC/block_run" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jstr "$q")}" >/dev/null || true
@@ -425,6 +415,7 @@ jobs:
               report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"}"
               curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
                 -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+              echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
               echo "::notice::outcome: succeeded ($REPO#$pr) — task parked"; exit 0
             else
               outcome="failed"; detail="PR #$pr exists but ./tool/verify.sh failed in the workflow environment"
@@ -434,10 +425,40 @@ jobs:
             report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")}"
             curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+            echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
             echo "::notice::outcome: succeeded on existing-code evidence — task parked"; exit 0
           fi
           report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")}"
+          echo "outcome=failed" >> "$GITHUB_OUTPUT"
           echo "::notice::outcome: failed — $detail"
+
+      # CONTINUE THE CHAIN — MECHANICAL (v2.1.0; earned by the session-2 run
+      # that stopped with 13 actionable issues left: chain decisions were
+      # agent judgment, now they are counted facts). github mode: re-dispatch
+      # iff the actionable count DECREASED (progress: PRs/blocks/closures all
+      # shrink it — a stuck queue cannot loop) and work remains. sakalmaster
+      # mode: re-dispatch iff this run ended succeeded/blocked — the next
+      # run's claim is the cheap emptiness test.
+      - name: Continue the chain
+        if: >-
+          always() && steps.go.outputs.has == 'true' && (
+            (inputs.source == 'github' && steps.work.outputs.count != '0') ||
+            (inputs.source == 'sakalmaster' && contains(fromJSON('["succeeded","blocked"]'), steps.sjudge.outputs.outcome))
+          )
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SRC: ${{ inputs.source }}
+          START_COUNT: ${{ steps.work.outputs.count }}
+          FILE: ${{ steps.dispatch.outputs.file }}
+        run: |
+          set -uo pipefail
+          if [ "$SRC" = "github" ]; then
+            n=$(gh api "repos/$REPO/issues?state=open&labels=claude-ready&per_page=100" --jq               '[.[] | select(.pull_request | not) | select(([.labels[].name] | index("claude-blocked") or index("claude-working")) | not)] | length' 2>/dev/null || echo "")
+            if [ -z "$n" ] || [ "$n" = "0" ]; then echo "::notice::chain: queue empty — done."; exit 0; fi
+            if [ "$n" -ge "${START_COUNT:-0}" ]; then echo "::notice::chain: no progress ($START_COUNT -> $n) — stopping, not looping."; exit 0; fi
+          fi
+          gh workflow run "$FILE" -R "$REPO" && echo "::notice::chain: re-dispatched $FILE" || echo "::warning::chain: re-dispatch failed (actions: write missing?)"
 
       # MECHANICAL release — guaranteed, runs even if the sweep step failed,
       # errored, timed out, or the agent ended early. A claude-working claim

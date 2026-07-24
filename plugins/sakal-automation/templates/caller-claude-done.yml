@@ -17,5 +17,5 @@ permissions:
 
 jobs:
   label:
-    uses: sakal-dev/automation/.github/workflows/claude-done.yml@v1
+    uses: sakal-dev/automation/.github/workflows/claude-done.yml@v2
     secrets: inherit
