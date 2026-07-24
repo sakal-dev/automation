@@ -7,9 +7,10 @@ Session prompts live in `docs/prompts/` (local, gitignored).
 **Sibling project:** `SakalMaster` (`sakal-dev/sakalmaster`, live on
 `master-staging.sakal.dev`) is the truth/ledger half — agents built here read from
 and report to it. How they connect, who owns what, and the convergence sequence:
-see SakalMaster's `docs/JOINT-ROADMAP.md`. As of now SakalMaster is live on staging;
-the integrated-mode flip waits on SakalMaster `#1` (app-filter) + its session 15
-(first live verification), both on SakalMaster's plate — Automation is ready.
+see SakalMaster's `docs/JOINT-ROADMAP.md`. **Phase 3 reached 2026-07-24**: garage
+runs integrated on staging (engine v2, OIDC, zero repo secrets); a merged agent PR
+flipped an AC to `enforced` in 9 seconds. Next joint milestone: production cutover
+(SM session 17).
 
 ## Sessions
 
