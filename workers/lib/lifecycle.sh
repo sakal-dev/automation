@@ -12,6 +12,12 @@
 # Exports after claim: TASK_REF (issue number | task key), RUN_ID (sakal),
 # BRIEF_FILE (assembled brief path).
 
+# Naming (2026-07-23, aligned with SakalMaster's CLI): SAKAL_SUPABASE_URL /
+# SAKAL_SUPABASE_PUBLISHABLE_KEY preferred; SAKAL_URL / SAKAL_ANON_KEY are
+# deprecated aliases accepted through v1.
+SAKAL_URL="${SAKAL_SUPABASE_URL:-${SAKAL_URL:-}}"
+SAKAL_ANON_KEY="${SAKAL_SUPABASE_PUBLISHABLE_KEY:-${SAKAL_ANON_KEY:-}}"
+
 # ── auth (sakal) ────────────────────────────────────────────────────────────
 sakal_jwt() {
   curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Methods 4 &amp; 5 — VPS worker</title>
+<style>
+  :root{--ink:#1b1b1f;--muted:#5b5b66;--line:#c9c9d2;--bg:#fbfbfd;--card:#ffffff;
+    --sakal:#2563eb;--gh:#e07a1a;--ai:#7c3aed;--app:#15a05a;--grey:#6b7280;--accent:#0f766e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5;padding:28px 20px}
+  .wrap{max-width:940px;margin:0 auto}
+  .nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 20px}
+  .nav a{font-size:12.5px;text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:var(--card)}
+  .nav a.on{color:#fff;background:var(--ink);border-color:var(--ink)}
+  .tag{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:23px;margin:4px 0 4px}
+  .sub{color:var(--muted);margin:0 0 16px;font-size:14.5px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 8px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .board{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 6px;overflow-x:auto}
+  svg{width:100%;height:auto;min-width:760px;display:block}
+  .facts{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 0}
+  .fact{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:12.5px}
+  .fact b{display:block;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px;font-weight:700}
+  .note{margin-top:16px;font-size:13px;color:var(--muted);border-left:3px solid var(--accent);padding:6px 0 6px 14px}
+  code{background:#eef;padding:1px 5px;border-radius:4px;font-size:12px}
+  .n-t{font-weight:700;font-size:13px;fill:var(--ink)}
+  .n-s{font-size:11px;fill:var(--muted)}
+  .box{fill:var(--card);stroke:var(--line);stroke-width:1.5}
+  @media (prefers-color-scheme:dark){:root{--ink:#e8e8ee;--muted:#a6a6b3;--line:#3a3a45;--bg:#161619;--card:#20202a;
+    --sakal:#5b8cff;--gh:#f0983f;--ai:#a884f5;--app:#3fce86;--grey:#9aa0ac;--accent:#4fd1c5}code{background:#2b2b3a}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a href="method-3-claude-code-action.html">Method 3 · Actions</a>
+    <a class="on" href="method-4-5-vps-worker.html">Methods 4·5 · VPS</a>
+    <a href="method-1-2-dispatch-cloud.html">Methods 1·2 · Dispatch</a>
+    <a href="customer-scenarios.html">★ Customer setup</a>
+  </nav>
+  <div class="tag">Methods 4 &amp; 5</div>
+  <h1>VPS worker — the agent runs on a server</h1>
+  <p class="sub">It pulls work, runs Claude, and pushes the PR itself. Most credentials, because the server does everything.</p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--sakal)"></i>SAKAL_TOKEN</span>
+    <span><i class="dot" style="background:var(--ai)"></i>Claude AI token</span>
+    <span><i class="dot" style="background:var(--gh)"></i>GitHub write</span>
+    <span><i class="dot" style="background:var(--app)"></i>read-only App</span>
+    <span><i class="dot" style="background:var(--grey)"></i>you</span>
+  </div>
+  <div class="board">
+  <svg viewBox="0 0 940 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SakalMaster at top. Worker claims a task, runs Claude, pushes a PR, you merge, App verifies. Worker reports runs up to SakalMaster.">
+    <defs>
+      <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker>
+      <marker id="ab" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--sakal)"/></marker>
+      <marker id="ag" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--app)"/></marker>
+    </defs>
+    <!-- SakalMaster top bar -->
+    <rect x="10" y="12" width="920" height="56" rx="13" fill="var(--card)" stroke="var(--sakal)" stroke-width="1.75"/>
+    <text class="n-t" x="30" y="37" fill="var(--sakal)">SakalMaster (Supabase)</text>
+    <text class="n-s" x="30" y="55">the queue · run dashboard · verifier — robot identities live here</text>
+
+    <!-- pipeline row -->
+    <g>
+      <rect class="box" x="10" y="150" width="168" height="112" rx="13"/>
+      <text class="n-t" x="94" y="182" text-anchor="middle">1 · Claim task</text>
+      <text class="n-s" x="94" y="201" text-anchor="middle">from the queue</text>
+      <rect x="30" y="218" width="128" height="26" rx="13" fill="none" stroke="var(--sakal)" stroke-width="1.5"/>
+      <text x="94" y="235" text-anchor="middle" font-size="10.5" fill="var(--sakal)" font-weight="700">SAKAL_TOKEN</text>
+    </g>
+    <g>
+      <rect class="box" x="198" y="150" width="168" height="112" rx="13"/>
+      <text class="n-t" x="282" y="182" text-anchor="middle">2 · Claude writes</text>
+      <text class="n-s" x="282" y="201" text-anchor="middle">on the server</text>
+      <rect x="218" y="218" width="128" height="26" rx="13" fill="none" stroke="var(--ai)" stroke-width="1.5"/>
+      <text x="282" y="235" text-anchor="middle" font-size="10.5" fill="var(--ai)" font-weight="700">CLAUDE token</text>
+    </g>
+    <g>
+      <rect class="box" x="386" y="150" width="168" height="112" rx="13"/>
+      <text class="n-t" x="470" y="182" text-anchor="middle">3 · Push + PR</text>
+      <text class="n-s" x="470" y="201" text-anchor="middle">as the bot</text>
+      <rect x="406" y="218" width="128" height="26" rx="13" fill="none" stroke="var(--gh)" stroke-width="1.5"/>
+      <text x="470" y="235" text-anchor="middle" font-size="10" fill="var(--gh)" font-weight="700">App token / GH_TOKEN</text>
+    </g>
+    <g>
+      <rect class="box" x="574" y="150" width="168" height="112" rx="13"/>
+      <text class="n-t" x="658" y="182" text-anchor="middle">4 · You merge</text>
+      <text class="n-s" x="658" y="201" text-anchor="middle">after review</text>
+      <rect x="594" y="218" width="128" height="26" rx="13" fill="none" stroke="var(--grey)" stroke-width="1.5"/>
+      <text x="658" y="235" text-anchor="middle" font-size="11" fill="var(--grey)" font-weight="700">you</text>
+    </g>
+    <g>
+      <rect class="box" x="762" y="150" width="168" height="112" rx="13"/>
+      <text class="n-t" x="846" y="182" text-anchor="middle">5 · Verify</text>
+      <text class="n-s" x="846" y="201" text-anchor="middle">AC moves, auto</text>
+      <rect x="782" y="218" width="128" height="26" rx="13" fill="none" stroke="var(--app)" stroke-width="1.5"/>
+      <text x="846" y="235" text-anchor="middle" font-size="10.5" fill="var(--app)" font-weight="700">read-only App</text>
+    </g>
+    <!-- horizontal arrows -->
+    <line x1="179" y1="206" x2="197" y2="206" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="367" y1="206" x2="385" y2="206" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="555" y1="206" x2="573" y2="206" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="743" y1="206" x2="761" y2="206" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <!-- claim up<->down (blue) node1<->SakalMaster -->
+    <line x1="94" y1="150" x2="94" y2="70" stroke="var(--sakal)" stroke-width="2" marker-end="url(#ab)"/>
+    <text x="100" y="120" font-size="10.5" fill="var(--sakal)" font-weight="700">claim · report run</text>
+    <!-- verify up (green) node5->SakalMaster -->
+    <line x1="846" y1="150" x2="846" y2="70" stroke="var(--app)" stroke-width="2" marker-end="url(#ag)"/>
+    <text x="700" y="120" font-size="10.5" fill="var(--app)" font-weight="700" text-anchor="end">push webhook → verify</text>
+  </svg>
+  </div>
+  <div class="facts">
+    <div class="fact"><b>Runs where</b>a VPS (Docker)</div>
+    <div class="fact"><b>Triggered by</b>polls the queue</div>
+    <div class="fact"><b>A server?</b>Yes</div>
+    <div class="fact"><b>Good for</b>always-on · fleet</div>
+  </div>
+  <p class="note"><b>Fleet rule:</b> several workers at once need <b>one bot identity per replica</b> (its own GitHub write token + <code>SAKAL_TOKEN</code>) — sharing one lets GitHub's rate-limiter kill their writes. This is why you're minting a second bot account. &nbsp;·&nbsp; <b>Customer path:</b> git access comes from the installed App, not a PAT — see <a href="customer-scenarios.html">Customer setup</a>.</p>
+</div>
+</body>
+</html>

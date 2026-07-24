@@ -22,12 +22,24 @@ inputs:
   mode:
     description: "heartbeat | progress | succeeded | failed | blocked"
     required: true
+  # Naming aligned with SakalMaster's CLI (2026-07-23); old names accepted
+  # through v1 with a warning, removed in v2.
+  sakal_supabase_url:
+    description: SakalMaster SUPABASE project URL (not the web app origin)
+    required: false
+    default: ""
+  sakal_supabase_publishable_key:
+    description: Supabase publishable key (public)
+    required: false
+    default: ""
   sakal_url:
-    description: SakalMaster Supabase URL
-    required: true
+    description: "DEPRECATED alias of sakal_supabase_url (removed in v2)"
+    required: false
+    default: ""
   anon_key:
-    description: Supabase anon key (public)
-    required: true
+    description: "DEPRECATED alias of sakal_supabase_publishable_key (removed in v2)"
+    required: false
+    default: ""
   project:
     description: SakalMaster project id (uuid)
     required: true
@@ -64,8 +76,10 @@ runs:
     - name: Report
       shell: bash
       env:
-        SAKAL_URL: ${{ inputs.sakal_url }}
-        ANON: ${{ inputs.anon_key }}
+        SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+        SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key }}
+        LEGACY_URL: ${{ inputs.sakal_url }}
+        LEGACY_KEY: ${{ inputs.anon_key }}
         TOKEN: ${{ inputs.token }}
         PROJECT: ${{ inputs.project }}
         RUN: ${{ inputs.run_id }}
@@ -77,6 +91,10 @@ runs:
         LEASE: ${{ inputs.lease_seconds }}
       run: |
         set -euo pipefail
+        SAKAL_URL="${SAKAL_SUPABASE_URL:-$LEGACY_URL}"
+        ANON="${SAKAL_SUPABASE_PUBLISHABLE_KEY:-$LEGACY_KEY}"
+        [ -z "$SAKAL_URL" ] && { echo "::error::report-sakal needs sakal_supabase_url"; exit 1; }
+        [ -n "$LEGACY_URL" ] && [ -z "$SAKAL_SUPABASE_URL" ] && echo "::warning::input 'sakal_url' is deprecated — use 'sakal_supabase_url' (removed in v2)"
         JWT=$(curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \
           -H "apikey: $ANON" -H "content-type: application/json" \
           -d "{\"token\":\"$TOKEN\"}" | jq -r '.access_token // empty')

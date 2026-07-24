@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer setup — three scenarios</title>
+<style>
+  :root{--ink:#1b1b1f;--muted:#5b5b66;--line:#c9c9d2;--bg:#fbfbfd;--card:#ffffff;
+    --good:#15a05a;--warn:#e07a1a;--goodbg:#eaf6ef;--warnbg:#fbeee0;--accent:#0f766e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5;padding:28px 20px}
+  .wrap{max-width:940px;margin:0 auto}
+  .nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 20px}
+  .nav a{font-size:12.5px;text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:var(--card)}
+  .nav a.on{color:#fff;background:var(--ink);border-color:var(--ink)}
+  .tag{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:23px;margin:4px 0 4px}
+  .sub{color:var(--muted);margin:0 0 14px;font-size:14.5px}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 8px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .sw{width:13px;height:13px;border-radius:3px;display:inline-block}
+  .board{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 6px;overflow-x:auto}
+  svg{width:100%;height:auto;min-width:800px;display:block}
+  .n-t{font-weight:700;font-size:13px;fill:var(--ink)}
+  .n-s{font-size:11px;fill:var(--muted)}
+  .note{margin-top:16px;font-size:13.5px;color:var(--muted);border-left:3px solid var(--accent);padding:8px 0 8px 14px}
+  .note b{color:var(--ink)}
+  code{background:#eef;padding:1px 5px;border-radius:4px;font-size:12px}
+  @media (prefers-color-scheme:dark){:root{--ink:#e8e8ee;--muted:#a6a6b3;--line:#3a3a45;--bg:#161619;--card:#20202a;
+    --good:#3fce86;--warn:#f0983f;--goodbg:#17281f;--warnbg:#2a2013;--accent:#4fd1c5}code{background:#2b2b3a}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a href="method-3-claude-code-action.html">Method 3 · Actions</a>
+    <a href="method-4-5-vps-worker.html">Methods 4·5 · VPS</a>
+    <a href="method-1-2-dispatch-cloud.html">Methods 1·2 · Dispatch</a>
+    <a class="on" href="customer-scenarios.html">★ Customer setup</a>
+  </nav>
+  <div class="tag">Customer setup</div>
+  <h1>Three ways a customer runs the VPS-worker method</h1>
+  <p class="sub">Same worker — the only thing that differs is how it reaches GitHub.</p>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--goodbg);border:1.5px solid var(--good)"></i>GitHub App · productized · NO bot account</span>
+    <span><i class="sw" style="background:var(--warnbg);border:1.5px solid var(--warn)"></i>hand-made PAT · dogfooding · bot account</span>
+  </div>
+  <div class="board">
+  <svg viewBox="0 0 940 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three lanes. Hosted and Self-host+App use the App (no bot account). Self-host BYOK uses a PAT (bot account). All end at the same verify.">
+    <defs>
+      <marker id="ag" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--good)"/></marker>
+      <marker id="ao" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--warn)"/></marker>
+    </defs>
+
+    <!-- Lane 1 -->
+    <g transform="translate(0,10)">
+      <rect x="8" y="8" width="196" height="96" rx="12" fill="var(--goodbg)" stroke="var(--good)" stroke-width="1.75"/>
+      <text class="n-t" x="24" y="38">1 · Hosted (SaaS)</text>
+      <text class="n-s" x="24" y="58">you run the workers</text>
+      <text class="n-s" x="24" y="78" fill="var(--good)" font-weight="700">→ NO bot account</text>
+      <rect x="242" y="22" width="196" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="256" y="50">Install the App</text><text class="n-s" x="256" y="70">+ link a repo</text>
+      <rect x="476" y="22" width="212" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="490" y="50">Your worker</text><text class="n-s" x="490" y="70">mints App token → PR</text>
+      <rect x="726" y="22" width="206" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="740" y="50">Merge → verify</text><text class="n-s" x="740" y="70">read-only App</text>
+      <line x1="204" y1="56" x2="240" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+      <line x1="438" y1="56" x2="474" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+      <line x1="688" y1="56" x2="724" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+    </g>
+
+    <!-- Lane 2 -->
+    <g transform="translate(0,175)">
+      <rect x="8" y="8" width="196" height="96" rx="12" fill="var(--goodbg)" stroke="var(--good)" stroke-width="1.75"/>
+      <text class="n-t" x="24" y="38">2 · Self-host + App</text>
+      <text class="n-s" x="24" y="58">customer runs the VPS</text>
+      <text class="n-s" x="24" y="78" fill="var(--good)" font-weight="700">→ NO bot account</text>
+      <rect x="242" y="22" width="196" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="256" y="50">Install the App</text><text class="n-s" x="256" y="70">+ run the worker</text>
+      <rect x="476" y="22" width="212" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="490" y="50">Their worker</text><text class="n-s" x="490" y="70">mints App token → PR</text>
+      <rect x="726" y="22" width="206" height="68" rx="12" fill="var(--card)" stroke="var(--good)" stroke-width="1.5"/>
+      <text class="n-t" x="740" y="50">Merge → verify</text><text class="n-s" x="740" y="70">read-only App</text>
+      <line x1="204" y1="56" x2="240" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+      <line x1="438" y1="56" x2="474" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+      <line x1="688" y1="56" x2="724" y2="56" stroke="var(--good)" stroke-width="2.5" marker-end="url(#ag)"/>
+    </g>
+
+    <!-- Lane 3 -->
+    <g transform="translate(0,340)">
+      <rect x="8" y="8" width="196" height="96" rx="12" fill="var(--warnbg)" stroke="var(--warn)" stroke-width="1.75"/>
+      <text class="n-t" x="24" y="38">3 · Self-host BYOK</text>
+      <text class="n-s" x="24" y="58">advanced / you today</text>
+      <text class="n-s" x="24" y="78" fill="var(--warn)" font-weight="700">→ bot account YES</text>
+      <rect x="242" y="22" width="196" height="68" rx="12" fill="var(--card)" stroke="var(--warn)" stroke-width="1.5"/>
+      <text class="n-t" x="256" y="50">Make a bot acct</text><text class="n-s" x="256" y="70">+ a write PAT</text>
+      <rect x="476" y="22" width="212" height="68" rx="12" fill="var(--card)" stroke="var(--warn)" stroke-width="1.5"/>
+      <text class="n-t" x="490" y="50">Worker uses the PAT</text><text class="n-s" x="490" y="70">GH_TOKEN → PR</text>
+      <rect x="726" y="22" width="206" height="68" rx="12" fill="var(--card)" stroke="var(--warn)" stroke-width="1.5"/>
+      <text class="n-t" x="740" y="50">Merge → verify</text><text class="n-s" x="740" y="70">read-only App</text>
+      <line x1="204" y1="56" x2="240" y2="56" stroke="var(--warn)" stroke-width="2.5" marker-end="url(#ao)"/>
+      <line x1="438" y1="56" x2="474" y2="56" stroke="var(--warn)" stroke-width="2.5" marker-end="url(#ao)"/>
+      <line x1="688" y1="56" x2="724" y2="56" stroke="var(--warn)" stroke-width="2.5" marker-end="url(#ao)"/>
+    </g>
+  </svg>
+  </div>
+  <p class="note"><b>Reuse your <code>GH_TOKEN</code>? Never.</b> A customer's worker gets GitHub write from the <b>App they install</b> — no bot account, nothing shared with you. The hand-made PAT is only the dogfooding shortcut while you're the sole user. <b>App = product · PAT = shortcut.</b></p>
+</div>
+</body>
+</html>

@@ -136,3 +136,7 @@ Workflows only exist on the default branch — verification is post-merge.
 - If a template needs changing to make install work, change the template in
   `sakal-dev/automation` (and its skeleton twin in the same commit) — never
   keep a private patched copy in the target repo.
+
+## Before asking for any credential
+
+Need a password/token/key to proceed? **Consult `docs/CREDENTIALS_REQUIRED_CHECKLIST.md` first.** Run its three zero-config tests, ask only for irreducible credentials, and hand the user the exact "how to create" steps from that file — never improvise a per-repo secret setup, and keep the three kinds distinct: the read-only **GitHub App** (reads/verify), the worker **`GH_TOKEN`** PAT (methods 4/5 push+PR), and the **`SAKAL_TOKEN`** SakalMaster agent account (claim/report). If a needed credential is not in the checklist, stop and have the user add it there first.

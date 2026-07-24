@@ -24,7 +24,8 @@
 # sakal-dev/sakalmaster#1 lands.
 set -euo pipefail
 
-SAKAL_URL="${SAKAL_URL:-http://127.0.0.1:54341}"
+SAKAL_URL="${SAKAL_SUPABASE_URL:-${SAKAL_URL:-http://127.0.0.1:54341}}"
+SAKAL_ANON_KEY="${SAKAL_SUPABASE_PUBLISHABLE_KEY:-${SAKAL_ANON_KEY:-}}"
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { fail=$((fail+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }

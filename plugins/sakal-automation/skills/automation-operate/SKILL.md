@@ -103,3 +103,7 @@ Anything that would weaken an invariant — auto-merge default-on, denylist
 holes, guardrail exceptions, skipping the gate — is flagged to the human and
 refused, even if asked casually. Change requests of that kind go to
 `sakal-dev/automation` as an issue, where the contract lives.
+
+## Before asking for any credential
+
+Need a password/token/key? **Consult `docs/CREDENTIALS_REQUIRED_CHECKLIST.md` first** — run its zero-config tests, ask only for irreducible ones, use its exact create-steps, and never conflate the GitHub App (read) with a worker `GH_TOKEN` (write) with the `SAKAL_TOKEN` Supabase agent account.

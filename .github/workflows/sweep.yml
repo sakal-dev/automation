@@ -76,12 +76,20 @@ on:
         description: "Task source: github (issues queue, standalone) | sakalmaster (claim_next_task, integrated). The EXECUTE step never branches on this — only SOURCE/BRIEF/GATE do (contract invariant 6)."
         type: string
         default: "github"
+      sakal_supabase_url:
+        description: SakalMaster SUPABASE project URL (sakalmaster mode; not the web-app origin)
+        type: string
+        default: ""
+      sakal_supabase_publishable_key:
+        description: Supabase publishable key, public (sakalmaster mode)
+        type: string
+        default: ""
       sakal_url:
-        description: SakalMaster Supabase URL (sakalmaster mode)
+        description: "DEPRECATED alias of sakal_supabase_url (removed in v2)"
         type: string
         default: ""
       sakal_anon_key:
-        description: SakalMaster anon key, public (sakalmaster mode)
+        description: "DEPRECATED alias of sakal_supabase_publishable_key (removed in v2)"
         type: string
         default: ""
       project:
@@ -142,8 +150,8 @@ jobs:
         if: ${{ inputs.source == 'sakalmaster' }}
         uses: sakal-dev/automation/actions/claim-sakal@v1
         with:
-          sakal_url: ${{ inputs.sakal_url }}
-          anon_key: ${{ inputs.sakal_anon_key }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
           project: ${{ inputs.project }}
           app: ${{ inputs.app }}
           source: github-sweep
@@ -304,8 +312,8 @@ jobs:
         if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
         uses: anthropics/claude-code-action@v1
         env:
-          SAKAL_URL: ${{ inputs.sakal_url }}
-          SAKAL_ANON_KEY: ${{ inputs.sakal_anon_key }}
+          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
+          SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
           SAKAL_TOKEN: ${{ secrets.SAKAL_TOKEN }}
           PROJECT: ${{ inputs.project }}
           RUN_ID: ${{ steps.sclaim.outputs.run_id }}
@@ -320,26 +328,26 @@ jobs:
             You are working ONE task claimed from SakalMaster: task `$TASK`
             (story `$STORY`, run id `$RUN_ID`). The `gh` CLI is authenticated,
             the toolchain is prepared (./tool/setup.sh has run), and the env
-            carries SAKAL_URL, SAKAL_ANON_KEY, SAKAL_TOKEN, PROJECT, RUN_ID,
+            carries SAKAL_SUPABASE_URL, SAKAL_SUPABASE_PUBLISHABLE_KEY, SAKAL_TOKEN, PROJECT, RUN_ID,
             TASK, STORY for the curl calls below. Follow the repo's rules
             (CLAUDE.md and the rules doc it imports).
 
             AUTH (the JWT lives ~15 min — re-exchange when needed):
-              JWT=$(curl -s -X POST "$SAKAL_URL/functions/v1/token-exchange" \
-                -H "apikey: $SAKAL_ANON_KEY" -H "content-type: application/json" \
+              JWT=$(curl -s -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+                -H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "content-type: application/json" \
                 -d "{\"token\":\"$SAKAL_TOKEN\"}" | jq -r .access_token)
-              AUTH=(-H "apikey: $SAKAL_ANON_KEY" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+              AUTH=(-H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "authorization: Bearer $JWT" -H "content-type: application/json")
 
             1. FETCH YOUR BRIEF from SakalMaster (RLS applies; read-only):
                the story, its ACs with derived status, citations, decisions —
-               e.g. `curl -s "${AUTH[@]}" "$SAKAL_URL/rest/v1/stories?key=eq.$STORY&select=*,acs(*)"`.
+               e.g. `curl -s "${AUTH[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=*,acs(*)"`.
                The GitHub issue queue is a MIRROR in this mode — do NOT take
                work from it.
             2. VERIFY FIRST — check every AC against the actual codebase
                before writing anything; already-satisfied ACs get evidence,
                not reimplementation.
             3. Report lifecycle into SakalMaster, not into any issue:
-               - periodically: `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\",\"p_summary\":\"<one line>\"}"`
+               - periodically: `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\",\"p_summary\":\"<one line>\"}"`
                - cannot proceed without a human decision: `block_run` with a
                  clear `p_reason`, then STOP — do not guess.
             4. Implement ONLY the missing/partial ACs on a branch
@@ -356,11 +364,11 @@ jobs:
                built vs added (file:line). Do NOT merge — auto-merge stays
                label-gated and human-opted.
             7. Report the outcome:
-               `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"${{ github.repository }}#<pr-number>\"}"`
+               `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"${{ github.repository }}#<pr-number>\"}"`
                THEN park the task so the queue does not re-serve it while its
                PR awaits merge + verification (a succeeded run does NOT
                retire a task — humans/merge flows mark it done):
-               `curl -s -X POST "$SAKAL_URL/rest/v1/rpc/set_task_agent_ready" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}"`
+               `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/set_task_agent_ready" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}"`
                You never mark an AC done — you cite code; the verifier
                decides. Attribution is automatic from the token.
             8. CONTINUE THE CHAIN: if you reported succeeded or blocked,
@@ -392,8 +400,8 @@ jobs:
         uses: sakal-dev/automation/actions/report-sakal@v1
         with:
           mode: failed
-          sakal_url: ${{ inputs.sakal_url }}
-          anon_key: ${{ inputs.sakal_anon_key }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
           project: ${{ inputs.project }}
           run_id: ${{ steps.sclaim.outputs.run_id }}
           error: "sweep run ${{ github.run_id }} ended without a reported outcome (step failure or cancellation)"

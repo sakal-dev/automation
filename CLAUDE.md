@@ -49,6 +49,13 @@ call a workflow a "method".
 
 - **No secrets or tokens in this repo, ever** — not in stubs, templates,
   examples, or tests.
+- **Need a credential? Consult `docs/CREDENTIALS_REQUIRED_CHECKLIST.md` first.**
+  Before asking the user for ANY password/token/key, run its three zero-config
+  tests; only ask for genuinely irreducible ones, and hand the user the exact
+  "how to create" steps from that file — never improvise a per-repo secret setup,
+  never conflate the GitHub App (read) with a worker `GH_TOKEN` (write) with the
+  SakalMaster `SAKAL_TOKEN` (Supabase agent account). If a needed credential is
+  missing from the checklist, stop and have the user add it there first.
 - Stub workflows stay **inert**: `workflow_call` only; a trigger that could
   fire (`push`, `schedule`) must not exist until the implementation session
   that owns it.
