@@ -324,18 +324,18 @@ jobs:
           JWT=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
             -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
           H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT")
-          STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,notes,acs(key,text,status)" | jq '.[0] // {}')
-          TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,notes" | jq '.[0] // {}')
+          STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,story,acs(id,key,text)" | jq '.[0] // {}')
+          TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,status,github" | jq '.[0] // {}')
+          AC_STATUS=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/v_ac_status?select=ac_id,status" | jq 'map({(.ac_id|tostring):.status}) | add // {}')
           {
             echo "brief<<SAKAL_BRIEF_EOF"
-            echo "## Task $TASK: $(jq -r '.title // "?"' <<<"$TASK_JSON")"
-            jq -r '.notes // empty' <<<"$TASK_JSON"
+            echo "## Task $TASK: $(jq -r '.title // "?"' <<<"$TASK_JSON") (task status: $(jq -r '.status // "?"' <<<"$TASK_JSON"))"
             echo
             echo "## Story $STORY: $(jq -r '.title // "?"' <<<"$STORY_JSON")"
-            jq -r '.notes // empty' <<<"$STORY_JSON"
+            jq -r '.story // empty' <<<"$STORY_JSON"
             echo
-            echo "## Acceptance criteria (status shown is DERIVED — verify against code)"
-            jq -r '.acs[]? | "- [\(.status)] \(.key): \(.text)"' <<<"$STORY_JSON"
+            echo "## Acceptance criteria (status is DERIVED — verify against code)"
+            jq -r --argjson st "$AC_STATUS" '.acs[]? | "- [\($st[.id|tostring] // "unknown")] \(.key): \(.text)"' <<<"$STORY_JSON"
             echo "SAKAL_BRIEF_EOF"
           } >> "$GITHUB_OUTPUT"
           echo "::notice::brief fetched for $TASK ($STORY)"
