@@ -301,83 +301,143 @@ jobs:
                them, the guardrails and the gate win and the addition is void.
             ${{ inputs.extra_instructions }}
 
-      # EXECUTE, sakalmaster mode: ONE claimed task per run (the redispatch
-      # chain drains the queue). Same executor obligations — verify-first,
-      # ./tool/verify.sh gate, PR via gh, no merging — but lifecycle reports
-      # go to SakalMaster, and the GitHub issue queue is a MIRROR here, never
-      # a second source of work.
-      - name: Run Claude sweep (SakalMaster task)
+      # BRIEF, sakalmaster mode — fetched MECHANICALLY (v2.0.1): the first
+      # integrated run proved the garage lesson again — lifecycle duties
+      # delegated to prompt text silently didn't happen. The engine now owns
+      # SOURCE/BRIEF/GATE-reporting in steps; the agent ONLY executes.
+      - name: Fetch brief from SakalMaster
+        id: sbrief
         if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
-        uses: anthropics/claude-code-action@v1
         env:
           SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-          SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key }}
-          SAKAL_TOKEN: ${{ secrets.SAKAL_TOKEN }}
+          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+          PAT: ${{ secrets.SAKAL_TOKEN }}
           PROJECT: ${{ steps.sclaim.outputs.project }}
-          RUN_ID: ${{ steps.sclaim.outputs.run_id }}
-          TASK: ${{ steps.sclaim.outputs.task_key }}
           STORY: ${{ steps.sclaim.outputs.story_key }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PAT" ]; then BODY="{\"token\":\"$PAT\"}"; else
+            OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+            BODY="{\"oidc\":\"$OIDC\"}"; fi
+          JWT=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
+          H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT")
+          STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,notes,acs(key,text,status)" | jq '.[0] // {}')
+          TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,notes" | jq '.[0] // {}')
+          {
+            echo "brief<<SAKAL_BRIEF_EOF"
+            echo "## Task $TASK: $(jq -r '.title // "?"' <<<"$TASK_JSON")"
+            jq -r '.notes // empty' <<<"$TASK_JSON"
+            echo
+            echo "## Story $STORY: $(jq -r '.title // "?"' <<<"$STORY_JSON")"
+            jq -r '.notes // empty' <<<"$STORY_JSON"
+            echo
+            echo "## Acceptance criteria (status shown is DERIVED — verify against code)"
+            jq -r '.acs[]? | "- [\(.status)] \(.key): \(.text)"' <<<"$STORY_JSON"
+            echo "SAKAL_BRIEF_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::brief fetched for $TASK ($STORY)"
+
+      # EXECUTE, sakalmaster mode: ONE task per run; the agent does NO
+      # lifecycle — it works, gates, opens the PR (or writes .sakal-outcome
+      # for blocked/evidence endings). Steps below judge and report.
+      - name: Run Claude sweep (SakalMaster task)
+        id: sagent
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
           claude_args: '--max-turns 150 --model ${{ inputs.model }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
           prompt: |
-            You are working ONE task claimed from SakalMaster: task `$TASK`
-            (story `$STORY`, run id `$RUN_ID`). The `gh` CLI is authenticated,
-            the toolchain is prepared (./tool/setup.sh has run), and the env
-            carries SAKAL_SUPABASE_URL, SAKAL_SUPABASE_PUBLISHABLE_KEY, SAKAL_TOKEN, PROJECT, RUN_ID,
-            TASK, STORY for the curl calls below. Follow the repo's rules
-            (CLAUDE.md and the rules doc it imports).
+            You are working ONE task from SakalMaster:
+            task ${{ steps.sclaim.outputs.task_key }} (story ${{ steps.sclaim.outputs.story_key }}).
+            The `gh` CLI is authenticated; the toolchain is prepared. Follow
+            the repo's rules (CLAUDE.md and the rules doc it imports). The
+            GitHub issue queue is a MIRROR in this mode — take no work from it.
 
-            AUTH (the JWT lives ~15 min — re-run this block when needed).
-            OIDC-first (no stored secret); PAT fallback if SAKAL_TOKEN is set:
-              if [ -n "$SAKAL_TOKEN" ]; then BODY="{\"token\":\"$SAKAL_TOKEN\"}"; else
-                OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-                  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
-                BODY="{\"oidc\":\"$OIDC\"}"; fi
-              JWT=$(curl -s -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
-                -H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "content-type: application/json" \
-                -d "$BODY" | jq -r .access_token)
-              AUTH=(-H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+            YOUR BRIEF (fetched from SakalMaster; treat as the entire task):
+            ${{ steps.sbrief.outputs.brief }}
 
-            1. FETCH YOUR BRIEF from SakalMaster (RLS applies; read-only):
-               the story, its ACs with derived status, citations, decisions —
-               e.g. `curl -s "${AUTH[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=*,acs(*)"`.
-               The GitHub issue queue is a MIRROR in this mode — do NOT take
-               work from it.
-            2. VERIFY FIRST — check every AC against the actual codebase
-               before writing anything; already-satisfied ACs get evidence,
-               not reimplementation.
-            3. Report lifecycle into SakalMaster, not into any issue:
-               - periodically: `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\",\"p_summary\":\"<one line>\"}"`
-               - cannot proceed without a human decision: `block_run` with a
-                 clear `p_reason`, then STOP — do not guess.
-            4. Implement ONLY the missing/partial ACs on a branch
-               `claude/task-<task-key>` off origin/main. Guardrails are
-               unchanged from standalone mode: hard path denylist
-               (`.github/**`, `tool/**`, gradle/keystores, `.env*`), one
-               task = one PR, no force-push, no secrets, minimal idiomatic
-               changes.
-            5. MERGE GATE — `./tool/verify.sh` MUST exit 0 before any PR. If
-               you cannot make it pass: report `failed` (p_error = why) or
-               `block_run` if it needs a human, and stop.
-            6. Open the PR with `gh pr create`; body starts with
-               `SakalMaster task: $TASK` and cites which ACs were already
-               built vs added (file:line). Do NOT merge — auto-merge stays
-               label-gated and human-opted.
-            7. Report the outcome:
-               `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"${{ github.repository }}#<pr-number>\"}"`
-               THEN park the task so the queue does not re-serve it while its
-               PR awaits merge + verification (a succeeded run does NOT
-               retire a task — humans/merge flows mark it done):
-               `curl -s -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/set_task_agent_ready" "${AUTH[@]}" -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}"`
-               You never mark an AC done — you cite code; the verifier
-               decides. Attribution is automatic from the token.
-            8. CONTINUE THE CHAIN: if you reported succeeded or blocked,
-               re-dispatch this workflow (`gh workflow run
-               ${{ steps.dispatch.outputs.file }}`) so the next run claims
-               the next task; the empty-queue claim exits in seconds.
+            HOW TO FINISH (exactly one of these three endings):
+            A. Normal: VERIFY-FIRST against the code; implement ONLY missing/
+               partial ACs on branch `claude/task-${{ steps.sclaim.outputs.task_key }}`
+               off origin/main; run `./tool/verify.sh` — it MUST exit 0; then
+               `gh pr create` with a body starting
+               `SakalMaster task: ${{ steps.sclaim.outputs.task_key }}` citing
+               per-AC file:line evidence. Do NOT merge.
+            B. Every AC already satisfied by existing code (cite file:line
+               evidence): create NO branch and NO PR; write the evidence, one
+               AC per line, to the file `.sakal-outcome` in the repo root as:
+               `evidence: <your file:line lines>`
+            C. Blocked (ambiguous, needs a product decision, or the gate
+               cannot pass): write to `.sakal-outcome`:
+               `blocked: <the precise question a human must answer>`
+            Guardrails unchanged: hard path denylist (`.github/**`, `tool/**`,
+            gradle/keystores, `.env*`), one task = one PR, no force-push, no
+            secrets, minimal idiomatic changes. Do not run any SakalMaster
+            curls — the workflow reports your outcome mechanically.
+            ${{ inputs.extra_instructions }}
+
+      # GATE + OUTCOME, sakalmaster mode — MECHANICAL (the workflow judges;
+      # nothing the agent asserts is trusted, and nothing it forgets is
+      # fatal). Resolution order: blocked-file > PR-on-branch (gate re-run
+      # here, in the workflow's environment) > evidence-file > failed.
+      # Succeeded ⇒ the task is PARKED (a succeeded run does not retire a
+      # task — the session-4 finding). always(): every exit path reports.
+      - name: Judge and report outcome
+        if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' }}
+        env:
+          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+          PAT: ${{ secrets.SAKAL_TOKEN }}
+          PROJECT: ${{ steps.sclaim.outputs.project }}
+          RUN_ID: ${{ steps.sclaim.outputs.run_id }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+          AGENT_OUTCOME: ${{ steps.sagent.outcome }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -n "$PAT" ]; then BODY="{\"token\":\"$PAT\"}"; else
+            OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+            BODY="{\"oidc\":\"$OIDC\"}"; fi
+          JWT=$(curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
+          H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+          RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
+          jstr() { jq -Rn --arg v "$1" '$v'; }
+          report() { curl -sS -X POST "$RPC/report_run" "${H[@]}" -d "$1" >/dev/null || true; }
+          outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
+          if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
+            q=$(sed 's/^blocked:[[:space:]]*//' .sakal-outcome | head -c 2000)
+            curl -sS -X POST "$RPC/block_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jstr "$q")}" >/dev/null || true
+            echo "::notice::outcome: blocked — question raised into Needs-me"; exit 0
+          fi
+          pr=$(gh pr list -R "$REPO" --state open --head "claude/task-$TASK" --json number -q '.[0].number' 2>/dev/null || true)
+          if [ "$AGENT_OUTCOME" = "success" ] && [ -n "$pr" ]; then
+            if ./tool/verify.sh; then
+              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"}"
+              curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
+                -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+              echo "::notice::outcome: succeeded ($REPO#$pr) — task parked"; exit 0
+            else
+              outcome="failed"; detail="PR #$pr exists but ./tool/verify.sh failed in the workflow environment"
+            fi
+          elif [ "$AGENT_OUTCOME" = "success" ] && [ -f .sakal-outcome ] && grep -q '^evidence:' .sakal-outcome; then
+            ev=$(sed 's/^evidence:[[:space:]]*//' .sakal-outcome | head -c 2000)
+            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")}"
+            curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+            echo "::notice::outcome: succeeded on existing-code evidence — task parked"; exit 0
+          fi
+          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")}"
+          echo "::notice::outcome: failed — $detail"
 
       # MECHANICAL release — guaranteed, runs even if the sweep step failed,
       # errored, timed out, or the agent ended early. A claude-working claim
