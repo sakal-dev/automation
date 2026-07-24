@@ -14,7 +14,7 @@ should be struck through with a date.
 | 5 | Staging admin password (`admin@sakal.dev`) | `SakalMaster/supabase/.env.staging` (local) | staging platform admin | SM staging setup | **flagged in SM STATUS as temp — rotate** |
 | 6 | Staging DB URL (superuser) | `SakalMaster/supabase/.env.staging` (local) | raw staging Postgres | SM staging setup | rotate DB password via Supabase dashboard if exposed |
 | 7 | PAT "sakal-verify CI" (`verifier@sakal.dev`) | garage repo secret `SAKAL_TOKEN`? **No — staging DB row only**; used by SM's verify CI config | read+write as verifier | 2026-07-23 | revoke in app → re-mint |
-| 8 | PAT "garage sweep" (`garage-sweep@sakal.dev`) | staging DB row; **no CI consumer since OIDC** | claim/report as agent | 2026-07-24 | **candidate to revoke** — OIDC replaced it; keep only if a VPS worker adopts it, else revoke |
+| 8 | ~~PAT "garage sweep" (`garage-sweep@sakal.dev`)~~ | — | — | 2026-07-24 | **REVOKED 2026-07-24** (audit event logged): no consumer since OIDC; a future VPS worker mints fresh in 60s. *Don't keep a key for a lock that doesn't exist.* |
 | 9 | Worker host env (`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`) | local test env file (chmod 600) / future `/etc/sakal-worker.env` | methods 4/5 agents + their PR pushes | 2026-07-23 (local drains) | per-host; delete local file when VPS lands |
 | 10 | GitHub Actions OIDC | **nothing stored anywhere** | CI ↔ SakalMaster (claim/report/brief), repo→app mapped by signature | 2026-07-24 | nothing to rotate — that is the point |
 

@@ -35,9 +35,13 @@ comparable open-source systems have (NOTES.md §6).
 ## Honest gaps (named, not hidden)
 
 Method 1: procedure ready, first logged run still needs the human's browser
-session. Method 2: no account — no verdict will be invented. Method 5: token
-cost uncapturable from the rotated logs — capture next drain. Mechanical
-chain (v2.1.0): fire-path not yet observed live (queues were empty at
-release) — watch the next multi-task drain. **Method 8 (Claude Code
+session. Method 2: no account — no verdict will be invented. **Fleet real
+run: DEFERRED by decision (2026-07-24)** — completeness, not capability; the
+mock caught the real findings and the mechanics are proven. If the N-worker
+verdict is ever genuinely needed, run it INTEGRATED with one SakalMaster
+agent PAT per replica (VPS can't mint OIDC). Method 5: token cost
+uncapturable from the rotated logs — capture next drain. Mechanical chain
+(v2.1.0): fire-path not yet observed live (queues were empty at release) —
+watch the next multi-task drain. **Method 8 (Claude Code
 Routines)**: worth one experiment as a managed method-3 replacement for the
 cron half — revisit after a month of steady-state cost data.
