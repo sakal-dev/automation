@@ -73,8 +73,31 @@ task — executors must park it (`set_task_agent_ready false`) or a chained
 sweep re-claims the task it just finished; the sweep prompt and the worker
 lifecycle both encode this now.
 
-**Live flip procedure (deferred until staging + the app filter):** add
-`SAKAL_URL`/`SAKAL_ANON_KEY`/`PROJECT`/`APP` inputs + `SAKAL_TOKEN` secret to
-garage's sweep caller, set `source: sakalmaster`, seed one agent-ready task
-for the garage app, `gh workflow run claude-daily-sweep.yml`, watch
-Team · Agents show claim → heartbeats → succeeded with the PR ref.
+### 2026-07-24 — THE INTEGRATED FLIP (session 9) — VERDICT: the loop is closed
+
+garage runs `source: sakalmaster` on engine v2 with **zero repo secrets and
+zero repo variables**: OIDC (audience `sakalmaster`) maps the GitHub-signed
+repository claim to project+app server-side — invariant 4 enforced by
+signature, not configuration.
+
+**The full both-products loop, proven on staging:** claim GR-T-001 (stale
+lease auto-retired to `abandoned`) → step-fetched brief with DERIVED AC
+statuses inlined → agent implements on the pinned toolchain → mechanical
+judge re-runs `./tool/verify.sh`, detects PR #120, reports `succeeded`,
+**parks the task** → merge at 08:18:31Z → **server-side verify-on-merge
+(Dart resolver) flips AC-2 `broken → enforced` at 08:18:40Z — nine
+seconds**. Nobody ticked a checkbox.
+
+**Three findings, all fixed engine-side same-day:** (1) lifecycle-by-prompt
+failed silently and invisibly (run 1: agent "success", nothing reported) —
+v2.0.1 made BRIEF/GATE-report/park mechanical steps; the agent only
+executes and signals endings (PR | `.sakal-outcome` evidence | blocked).
+(2) A live lease correctly empties the queue — don't re-dispatch before
+expiry (run 2, working as designed). (3) Schema-guessed REST selects — 
+v2.0.3 + the rule: dry-run REST shapes locally before burning a run.
+
+**Mirror rule:** structural — `Check for work` and the github agent step are
+`skipped` in sakal mode (proven in every integrated run). **Block path:**
+`block_run` → question raised (staging suite check 4). **Rollback drill:**
+one line out → github run drained #119 (PR #122) → one line back →
+confirmation run took the sakal path. Both directions proven.
