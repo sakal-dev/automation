@@ -1,50 +1,46 @@
 # =============================================================================
-# claim-sakal — SOURCE step, sakalmaster (integrated) mode. REAL.
-# Contract: docs/task-contract.md step 1. REST per SakalMaster's
-# docs/ci/agent-runs.md: token-exchange (SAKAL_TOKEN → ~15-min JWT) →
-# POST /rest/v1/rpc/claim_next_task. The claim is atomic and leased
-# (FOR UPDATE SKIP LOCKED server-side): one winner even with parallel
-# claimants; an expired lease makes the task claimable again and the old run
-# `abandoned`. This action never retries a claim it lost.
+# claim-sakal — SOURCE step, sakalmaster (integrated) mode. v2: OIDC-FIRST.
 #
-# APP FILTER (contract invariant 4): the `app` input forwards as `p_app` ONLY
-# when non-empty. As of 2026-07-22 SakalMaster's claim_next_task has NO app
-# parameter — the formal request is filed (see the SakalMaster issue
-# referenced in docs/methods/03). Until it lands: leave `app` empty ONLY for
-# projects with a single app; a multi-app project MUST NOT run a filterless
-# claim from a repo-bound claimant.
+# Default path (GitHub Actions, ZERO stored secrets): the job mints a GitHub
+# OIDC token (requires `permissions: id-token: write` in the caller), the
+# SakalMaster token-exchange verifies it against GitHub's JWKS and maps the
+# GitHub-signed `repository` claim through apps.github_repo → project + app.
+# The caller supplies NOTHING: no token, no project, no app — the granularity
+# rule (contract invariant 4: a repo claims only its own app's tasks) is
+# enforced by the server-side mapping, not by configuration. Audience is
+# pinned to `sakalmaster` (replay defence).
 #
-# Outputs: claimed=true|false; run_id, task_key, story_key when claimed.
-# Empty queue → claimed=false, success exit (the caller's cheap gate).
+# Fallback path (non-Actions runners — the VPS workers — which cannot mint
+# OIDC): set `token` (a sakal_pat_… PAT) + `project` (+ `app` for the filter).
+#
+# URL + publishable key default to the hosted instance — they are public and
+# identical for every caller; override only for self-hosted SakalMaster.
+# The claim itself is unchanged: atomic, leased, FOR UPDATE SKIP LOCKED.
+# v2 removes the deprecated sakal_url / anon_key input names (v1.1.0 was the
+# last release accepting them).
 # =============================================================================
 name: claim-sakal
-description: "Claim one task from the SakalMaster queue (token-exchange + PostgREST, atomic lease)"
+description: "Claim one task from the SakalMaster queue (OIDC by default — zero stored secrets; PAT fallback for non-Actions runners)"
 
 inputs:
-  # Naming (2026-07-23, aligned with SakalMaster's CLI): the Supabase project
-  # origin — NOT the web-app origin — hence sakal_supabase_url. Old names
-  # accepted through v1 with a deprecation warning; removed in v2.
   sakal_supabase_url:
-    description: SakalMaster SUPABASE project URL (https://xyz.supabase.co — not the web app origin)
+    description: SakalMaster SUPABASE project URL (defaults to the hosted instance; override for self-hosted)
     required: false
-    default: ""
+    default: "https://yfsempkvvdglebtlkztn.supabase.co"
   sakal_supabase_publishable_key:
-    description: Supabase publishable key (public, sb_publishable_…)
+    description: Supabase publishable key (public; defaults to the hosted instance)
     required: false
-    default: ""
-  sakal_url:
-    description: "DEPRECATED alias of sakal_supabase_url (removed in v2)"
-    required: false
-    default: ""
-  anon_key:
-    description: "DEPRECATED alias of sakal_supabase_publishable_key (removed in v2)"
+    default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+  token:
+    description: "PAT fallback (sakal_pat_…) for runners that cannot mint GitHub OIDC. Leave empty in Actions."
     required: false
     default: ""
   project:
-    description: SakalMaster project id (uuid)
-    required: true
+    description: "Project uuid — PAT path only (the OIDC exchange returns it)"
+    required: false
+    default: ""
   app:
-    description: "App key/id for the claim filter (forwarded as p_app only when set — requires the SakalMaster app-filter change)"
+    description: "App-filter key — PAT path only (the OIDC exchange returns the repo's mapped app)"
     required: false
     default: ""
   source:
@@ -55,9 +51,6 @@ inputs:
     description: Lease duration; heartbeats extend it
     required: false
     default: "1800"
-  token:
-    description: SAKAL_TOKEN — service-account PAT (secret)
-    required: true
 
 outputs:
   claimed:
@@ -67,58 +60,83 @@ outputs:
     description: The agent_runs id owning the lease
     value: ${{ steps.claim.outputs.run_id }}
   task_key:
-    description: Claimed task key (e.g. TSK-0012)
+    description: Claimed task key
     value: ${{ steps.claim.outputs.task_key }}
   story_key:
     description: The story the task implements (may be empty)
     value: ${{ steps.claim.outputs.story_key }}
+  project:
+    description: Project uuid (from the OIDC exchange, or the input on the PAT path)
+    value: ${{ steps.claim.outputs.project }}
+  app:
+    description: App key (from the OIDC exchange, or the input on the PAT path)
+    value: ${{ steps.claim.outputs.app }}
 
 runs:
   using: composite
   steps:
-    - name: Exchange token and claim
+    - name: Authenticate and claim
       id: claim
       shell: bash
       env:
         SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-        SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key }}
-        LEGACY_URL: ${{ inputs.sakal_url }}
-        LEGACY_KEY: ${{ inputs.anon_key }}
-        TOKEN: ${{ inputs.token }}
-        PROJECT: ${{ inputs.project }}
-        APP: ${{ inputs.app }}
+        ANON: ${{ inputs.sakal_supabase_publishable_key }}
+        PAT: ${{ inputs.token }}
+        IN_PROJECT: ${{ inputs.project }}
+        IN_APP: ${{ inputs.app }}
         SRC: ${{ inputs.source }}
         LEASE: ${{ inputs.lease_seconds }}
+        OIDC_AUDIENCE: sakalmaster
       run: |
         set -euo pipefail
-        SAKAL_URL="${SAKAL_SUPABASE_URL:-$LEGACY_URL}"
-        ANON="${SAKAL_SUPABASE_PUBLISHABLE_KEY:-$LEGACY_KEY}"
-        [ -z "$SAKAL_URL" ] && { echo "::error::claim-sakal needs sakal_supabase_url"; exit 1; }
-        [ -n "$LEGACY_URL" ] && [ -z "$SAKAL_SUPABASE_URL" ] && echo "::warning::input 'sakal_url' is deprecated — use 'sakal_supabase_url' (removed in v2)"
-        [ -n "$LEGACY_KEY" ] && [ -z "$SAKAL_SUPABASE_PUBLISHABLE_KEY" ] && echo "::warning::input 'anon_key' is deprecated — use 'sakal_supabase_publishable_key' (removed in v2)"
-        JWT=$(curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \
-          -H "apikey: $ANON" -H "content-type: application/json" \
-          -d "{\"token\":\"$TOKEN\"}" | jq -r '.access_token // empty')
-        if [ -z "$JWT" ]; then
-          echo "::error::token-exchange failed — check SAKAL_URL / SAKAL_TOKEN / anon key"
-          exit 1
+        if [ -z "$PAT" ]; then
+          # ── OIDC path (default): zero stored secrets ──────────────────────
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::claim-sakal: no PAT given and no OIDC available — in Actions, grant 'permissions: id-token: write'; off Actions, set the token input"
+            exit 1
+          fi
+          OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r '.value // empty')
+          [ -n "$OIDC" ] || { echo "::error::could not mint an OIDC token"; exit 1; }
+          RESP=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "{\"oidc\":\"$OIDC\"}")
+          JWT=$(jq -r '.access_token // empty' <<<"$RESP")
+          PROJECT=$(jq -r '.project // empty' <<<"$RESP")
+          APP=$(jq -r '.app // empty' <<<"$RESP")
+          [ -n "$JWT" ] && [ -n "$PROJECT" ] && [ -n "$APP" ] || {
+            echo "::error::OIDC exchange failed or repo not linked to an app: $(jq -c 'del(.access_token)' <<<"$RESP" 2>/dev/null)"; exit 1; }
+          echo "::notice::OIDC: $GITHUB_REPOSITORY → project=$PROJECT app=$APP (server-mapped, no stored secret)"
+        else
+          # ── PAT fallback (non-Actions runners) ────────────────────────────
+          [ -n "$IN_PROJECT" ] || { echo "::error::PAT path requires the project input"; exit 1; }
+          JWT=$(curl -sf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" \
+            -d "{\"token\":\"$PAT\"}" | jq -r '.access_token // empty')
+          [ -n "$JWT" ] || { echo "::error::token-exchange failed — check the PAT"; exit 1; }
+          PROJECT="$IN_PROJECT"; APP="$IN_APP"
         fi
         payload="{\"p_project\":\"$PROJECT\",\"p_source\":\"$SRC\",\"p_lease_seconds\":$LEASE"
+        # The app filter is ALWAYS applied when an app is known (invariant 4);
+        # on the OIDC path it always is — the mapping is the enforcement.
         if [ -n "$APP" ]; then payload="$payload,\"p_app\":\"$APP\""; fi
         payload="$payload}"
-        CLAIM=$(curl -sf -X POST "$SAKAL_URL/rest/v1/rpc/claim_next_task" \
+        CLAIM=$(curl -sf -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/claim_next_task" \
           -H "apikey: $ANON" -H "authorization: Bearer $JWT" \
           -H "content-type: application/json" -d "$payload")
-        RUN=$(echo "$CLAIM" | jq -r '.[0].run_id // empty')
+        {
+          echo "project=$PROJECT"
+          echo "app=$APP"
+        } >> "$GITHUB_OUTPUT"
+        RUN=$(jq -r '.[0].run_id // empty' <<<"$CLAIM")
         if [ -z "$RUN" ]; then
           echo "claimed=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::SakalMaster queue empty for this project/app — nothing to claim."
+          echo "::notice::SakalMaster queue empty for app '$APP' — nothing to claim."
           exit 0
         fi
         {
           echo "claimed=true"
           echo "run_id=$RUN"
-          echo "task_key=$(echo "$CLAIM" | jq -r '.[0].task_key // empty')"
-          echo "story_key=$(echo "$CLAIM" | jq -r '.[0].story_key // empty')"
+          echo "task_key=$(jq -r '.[0].task_key // empty' <<<"$CLAIM")"
+          echo "story_key=$(jq -r '.[0].story_key // empty' <<<"$CLAIM")"
         } >> "$GITHUB_OUTPUT"
-        echo "::notice::Claimed $(echo "$CLAIM" | jq -r '.[0].task_key') (run $RUN)"
+        echo "::notice::Claimed $(jq -r '.[0].task_key' <<<"$CLAIM") (run $RUN)"

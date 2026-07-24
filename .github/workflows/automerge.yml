@@ -43,7 +43,7 @@
 #     checks: read           # read the named check's conclusion on the head
 #   jobs:
 #     automerge:
-#       uses: sakal-dev/automation/.github/workflows/automerge.yml@v1
+#       uses: sakal-dev/automation/.github/workflows/automerge.yml@v2
 #       secrets: inherit
 # =============================================================================
 name: automerge

@@ -38,7 +38,7 @@
 #         (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
 #         (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
 #         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
-#       uses: sakal-dev/automation/.github/workflows/on-demand.yml@v1
+#       uses: sakal-dev/automation/.github/workflows/on-demand.yml@v2
 #       secrets: inherit
 #
 # Concurrency is per-issue INSIDE the engine (ondemand-<issue #>): parallel
@@ -89,7 +89,7 @@ jobs:
       - name: Claim issue (claude-working)
         id: claim
         if: ${{ github.event.issue.number && !github.event.issue.pull_request }}
-        uses: sakal-dev/automation/actions/claim-github@v1
+        uses: sakal-dev/automation/actions/claim-github@v2
         with:
           mode: claim
           issue: ${{ github.event.issue.number }}
@@ -107,7 +107,7 @@ jobs:
       # @claude PR could carry no verification at all.
       - name: Set up project (./tool/setup.sh)
         if: ${{ steps.claim.outputs.already-owned != 'true' }}
-        uses: sakal-dev/automation/actions/setup-project@v1
+        uses: sakal-dev/automation/actions/setup-project@v2
 
       # Model from the issue's labels: `opus` / `sonnet` / `fable`; with none,
       # the model input's default applies. (Availability depends on the
@@ -183,7 +183,7 @@ jobs:
       # if THIS run claimed it (a stand-down doesn't strip another run's label).
       - name: Release issue (claude-working)
         if: ${{ always() && steps.claim.outputs.claimed == 'true' }}
-        uses: sakal-dev/automation/actions/claim-github@v1
+        uses: sakal-dev/automation/actions/claim-github@v2
         with:
           mode: release
           issue: ${{ github.event.issue.number }}

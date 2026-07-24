@@ -20,7 +20,7 @@
 #     contents: read
 #   jobs:
 #     verify:
-#       uses: sakal-dev/automation/.github/workflows/verify.yml@v1
+#       uses: sakal-dev/automation/.github/workflows/verify.yml@v2
 #       with: { app: garage }
 #       secrets: inherit
 #

@@ -1,51 +1,41 @@
 # =============================================================================
-# report-sakal — run lifecycle reporting into SakalMaster. REAL.
-# Contract: docs/task-contract.md step 4 (integrated). REST per SakalMaster's
-# docs/ci/agent-runs.md. One action, five modes:
-#   heartbeat   report_run status=running (keeps the lease alive; a silent
-#               run is reclaimed after lease expiry)
-#   progress    report_run status=running + summary text
-#   succeeded   report_run status=succeeded + p_pr_ref (repo#pr)
-#   failed      report_run status=failed + error text
-#   blocked     block_run + reason — the server raises the story's question
-#               into Needs-me. Blocking is an outcome, not a failure.
-# report_run/block_run only accept writes on a run THIS token's identity owns
-# (attribution is server-enforced). Call the final outcome from an always()
-# step — the integrated analogue of the label release. A `succeeded` run
-# changes no AC: the verifier decides what the work proved.
-# Exchanges the PAT per call (the JWT lives ~15 min; runs live longer).
+# report-sakal — run lifecycle reporting into SakalMaster. v2: OIDC-FIRST.
+# Same auth model as claim-sakal: in Actions the step mints a GitHub OIDC
+# token (needs `permissions: id-token: write`) and the exchange returns the
+# session + project — no stored secret, no project input. PAT fallback for
+# non-Actions runners. Modes unchanged:
+#   heartbeat | progress | succeeded | failed | blocked
+# report_run/block_run only accept writes on a run THIS identity owns. Call
+# the final outcome from an always() step — the integrated analogue of the
+# label release. A `succeeded` run changes no AC: the verifier decides.
+# v2 removes the deprecated sakal_url / anon_key names (last in v1.1.0).
 # =============================================================================
 name: report-sakal
-description: "Report run lifecycle (heartbeat/progress/succeeded/failed/blocked) into SakalMaster agent_runs"
+description: "Report run lifecycle into SakalMaster agent_runs (OIDC by default; PAT fallback)"
 
 inputs:
   mode:
     description: "heartbeat | progress | succeeded | failed | blocked"
     required: true
-  # Naming aligned with SakalMaster's CLI (2026-07-23); old names accepted
-  # through v1 with a warning, removed in v2.
-  sakal_supabase_url:
-    description: SakalMaster SUPABASE project URL (not the web app origin)
-    required: false
-    default: ""
-  sakal_supabase_publishable_key:
-    description: Supabase publishable key (public)
-    required: false
-    default: ""
-  sakal_url:
-    description: "DEPRECATED alias of sakal_supabase_url (removed in v2)"
-    required: false
-    default: ""
-  anon_key:
-    description: "DEPRECATED alias of sakal_supabase_publishable_key (removed in v2)"
-    required: false
-    default: ""
-  project:
-    description: SakalMaster project id (uuid)
-    required: true
   run_id:
     description: The run to report on (from claim-sakal)
     required: true
+  sakal_supabase_url:
+    description: SakalMaster SUPABASE project URL (defaults to the hosted instance)
+    required: false
+    default: "https://yfsempkvvdglebtlkztn.supabase.co"
+  sakal_supabase_publishable_key:
+    description: Supabase publishable key (public; defaults to the hosted instance)
+    required: false
+    default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+  token:
+    description: "PAT fallback for non-Actions runners. Leave empty in Actions."
+    required: false
+    default: ""
+  project:
+    description: "Project uuid — PAT path only (the OIDC exchange returns it)"
+    required: false
+    default: ""
   summary:
     description: Progress summary (mode=progress; optional elsewhere)
     required: false
@@ -66,22 +56,17 @@ inputs:
     description: Lease extension on heartbeat/progress
     required: false
     default: "1800"
-  token:
-    description: SAKAL_TOKEN — service-account PAT (secret)
-    required: true
 
 runs:
   using: composite
   steps:
-    - name: Report
+    - name: Authenticate and report
       shell: bash
       env:
         SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-        SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key }}
-        LEGACY_URL: ${{ inputs.sakal_url }}
-        LEGACY_KEY: ${{ inputs.anon_key }}
-        TOKEN: ${{ inputs.token }}
-        PROJECT: ${{ inputs.project }}
+        ANON: ${{ inputs.sakal_supabase_publishable_key }}
+        PAT: ${{ inputs.token }}
+        IN_PROJECT: ${{ inputs.project }}
         RUN: ${{ inputs.run_id }}
         MODE: ${{ inputs.mode }}
         SUMMARY: ${{ inputs.summary }}
@@ -89,19 +74,29 @@ runs:
         PR_REF: ${{ inputs.pr_ref }}
         REASON: ${{ inputs.reason }}
         LEASE: ${{ inputs.lease_seconds }}
+        OIDC_AUDIENCE: sakalmaster
       run: |
         set -euo pipefail
-        SAKAL_URL="${SAKAL_SUPABASE_URL:-$LEGACY_URL}"
-        ANON="${SAKAL_SUPABASE_PUBLISHABLE_KEY:-$LEGACY_KEY}"
-        [ -z "$SAKAL_URL" ] && { echo "::error::report-sakal needs sakal_supabase_url"; exit 1; }
-        [ -n "$LEGACY_URL" ] && [ -z "$SAKAL_SUPABASE_URL" ] && echo "::warning::input 'sakal_url' is deprecated — use 'sakal_supabase_url' (removed in v2)"
-        JWT=$(curl -sf -X POST "$SAKAL_URL/functions/v1/token-exchange" \
-          -H "apikey: $ANON" -H "content-type: application/json" \
-          -d "{\"token\":\"$TOKEN\"}" | jq -r '.access_token // empty')
-        [ -z "$JWT" ] && { echo "::error::token-exchange failed"; exit 1; }
+        if [ -z "$PAT" ]; then
+          [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || { echo "::error::report-sakal: no PAT and no OIDC — grant id-token: write, or set token"; exit 1; }
+          OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$OIDC_AUDIENCE" | jq -r '.value // empty')
+          RESP=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "{\"oidc\":\"$OIDC\"}")
+          JWT=$(jq -r '.access_token // empty' <<<"$RESP")
+          PROJECT=$(jq -r '.project // empty' <<<"$RESP")
+          [ -n "$JWT" ] && [ -n "$PROJECT" ] || { echo "::error::OIDC exchange failed"; exit 1; }
+        else
+          [ -n "$IN_PROJECT" ] || { echo "::error::PAT path requires the project input"; exit 1; }
+          JWT=$(curl -sf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" \
+            -d "{\"token\":\"$PAT\"}" | jq -r '.access_token // empty')
+          [ -n "$JWT" ] || { echo "::error::token-exchange failed"; exit 1; }
+          PROJECT="$IN_PROJECT"
+        fi
         H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
-        RPC="$SAKAL_URL/rest/v1/rpc"
-        jstr() { jq -Rn --arg v "$1" '$v'; }   # safe JSON string
+        RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
+        jstr() { jq -Rn --arg v "$1" '$v'; }
         case "$MODE" in
           heartbeat)
             curl -sf -X POST "$RPC/report_run" "${H[@]}" \
@@ -116,7 +111,7 @@ runs:
             curl -sf -X POST "$RPC/report_run" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"failed\",\"p_error\":$(jstr "$ERRTXT")}" ;;
           blocked)
-            [ -z "$REASON" ] && { echo "::error::mode=blocked requires a reason (the human's question)"; exit 1; }
+            [ -z "$REASON" ] && { echo "::error::mode=blocked requires a reason"; exit 1; }
             curl -sf -X POST "$RPC/block_run" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_reason\":$(jstr "$REASON")}" ;;
           *)

@@ -19,6 +19,20 @@ touches it. Grounded in the real variable names in this repo
 > This exists because credentials were explained inconsistently in chat and the
 > GitHub-App vs GitHub-PAT vs Supabase-account distinction got muddled. One
 > muddle like that is a bug; repeating it is not allowed.
+>
+> **Two rules this file now enforces (learned the hard way, 2026-07-24):**
+> 1. **A principle must ship with its mechanism.** "Derive it from the link" with
+>    no derivation path gets read as "paste it for now" by whoever is under
+>    delivery pressure — which is exactly how a five-value per-repo env block got
+>    handed over while quoting the no-hand-wiring rule in the same breath. If the
+>    mechanism doesn't exist yet, name it as the blocker; don't publish a contract
+>    that contradicts its own principle.
+> 2. **Prefer federated identity over credential distribution.** Before asking
+>    *which* secret goes *where*, ask whether the runtime can **prove its own
+>    identity** (GitHub Actions OIDC, a signed App installation token, workload
+>    identity). Reach for a stored secret only when it genuinely cannot. If a
+>    design would ever make a customer set a scary permission you'd later retract
+>    (e.g. `Secrets: write` on their repos), the design is wrong.
 
 ## The three zero-config tests (apply BEFORE treating anything as "needed")
 
@@ -42,9 +56,10 @@ platform handles; customers configure nothing.
 | 2 | `GH_TOKEN` (worker PAT) | VPS worker **pushes + opens PR** (methods 4/5) | GitHub → Settings → Developer → PAT | a **GitHub machine/agent account**, never personal | no — hosted robots use the platform's; self-host only |
 | 3 | **"Sakal Master" GitHub App** | **read** code, webhooks, repo picker, server-side verify | already created (org App) | the org (installed once) | **yes — the only thing a base customer does: install + link** |
 | 4 | *write* GitHub App **or** claude-code-action token | method-3 (`@claude`/sweep) **opens PRs** in Actions | App you register for the action | the org (separate, write-scoped) | only if they enable in-Actions robots |
-| 5 | `SAKAL_TOKEN` (`sakal_pat_…`) | worker/CI **claims tasks + reports runs** to SakalMaster | SakalMaster app → profile → API tokens | a **SakalMaster agent account** (Supabase user), never personal | no — auto-provisioned per org on connect |
-| 6 | `SAKAL_SUPABASE_URL` + `SAKAL_SUPABASE_PUBLISHABLE_KEY` | which backend + its public key (the SUPABASE project origin, NOT the web app) | copy from the project | n/a (URL + publishable key, both public) | no — derived from the connection |
-| 7 | `PROJECT` + `APP` | *which* project/app to act on | copy the ids | n/a (selectors, not secrets) | no — derived from the link |
+| 5 | **GitHub Actions OIDC** (no stored token) — the DEFAULT for Actions runtimes | Actions runtime (method 3 sweep) **claims tasks + reports runs** to SakalMaster | GitHub mints it per-run (`permissions: id-token: write`) | GitHub signs it; `token-exchange` verifies + maps to the org's auto-provisioned agent | **no — zero secrets, works on every plan incl. Free** |
+| 5b | `SAKAL_TOKEN` (`sakal_pat_…`) — **non-Actions fallback only** | a VPS/SDK worker (NOT in a GitHub runner, so no OIDC) claims/reports | SakalMaster app → API tokens | a dedicated **SakalMaster agent account**, never personal | no — dogfooding/self-host only; a hosted worker uses a signed App installation token instead |
+| 6 | `SAKAL_SUPABASE_URL` + `SAKAL_SUPABASE_PUBLISHABLE_KEY` | which backend + its public key (the SUPABASE project origin, NOT the web app) | **returned by `token-exchange`**, or copied for a self-host worker | n/a (URL + publishable key, both public) | no — derived from the connection |
+| 7 | `PROJECT` + `APP` | *which* project/app to act on | **derived server-side from the OIDC `repository` claim** via `apps.github_repo` | n/a (selectors, not secrets) | no — never sent by the runtime at all |
 | 8 | Production platform secrets | run the hosted platform itself | operator (you) | the platform (one instance) | **never** — operator-only, not per customer |
 
 Rule of thumb from the table: **a base customer touches exactly ONE row (#3).**
@@ -130,38 +145,70 @@ Everything else is either operator setup (you, once) or a self-hosting power-up.
   read-only (least privilege; base customers never grant write).
 - **Customer path:** only customers who enable in-Actions robots.
 
-## 5. `SAKAL_TOKEN` — the SakalMaster service PAT (integrated mode)
+## 5. Authenticating to SakalMaster — OIDC (default) / token (fallback)
 
-- **What:** a SakalMaster personal access token (`sakal_pat_…`) for a service
-  account, hashed server-side.
-- **Why:** in `source: sakalmaster` mode the worker/CI exchanges it at
-  `token-exchange` for a short-lived JWT, then claims tasks and reports runs — so
-  History honestly says *the agent* did it, not you.
-- **Who uses it:** the sweep/worker in integrated mode; the CI run-reporter.
-- **How to create:** SakalMaster app → profile → API tokens → new (read+write) →
-  copy the `sakal_pat_…` value once.
-- **Account:** a **dedicated SakalMaster agent account** (Supabase user with an
-  `is_agent` people row), never your personal login. This is the "separate account
-  inside Supabase" — it exists purely for honest attribution.
-- **Live example (worker env, sakalmaster mode):**
+**This section was rebuilt 2026-07-24.** The old version specified a five-value
+per-repo env block (`SAKAL_TOKEN` + `SAKAL_URL` + `SAKAL_ANON_KEY` + `PROJECT` +
+`APP`) — which violated this file's own no-hand-wiring principle and does not
+scale (20 repos → 100 values; the "org secrets" mitigation needs a paid Team plan
+and only works inside your own org — a builder privilege, not a customer answer).
+Superseded by federated identity.
+
+### 5a — GitHub Actions OIDC (the default; how the garage sweep authenticates)
+
+- **What:** GitHub mints a short-lived, **GitHub-signed** OIDC token per workflow
+  run whose claims include `repository: owner/name`. **No stored secret.**
+- **The mechanism (this is the derivation the old doc was missing):**
+  1. the caller declares `permissions: id-token: write` — available on **every
+     GitHub plan, including Free**;
+  2. it sends the signed token to SakalMaster's `token-exchange`;
+  3. SakalMaster verifies the signature against **GitHub's public JWKS** (no shared
+     secret to distribute) and checks `iss`, `exp`, and `aud` (so a token minted
+     for another service can't be replayed);
+  4. it reads the `repository` claim and maps it through `apps.github_repo` — data
+     the platform **already stores** — to project + app;
+  5. it returns a short session for the org's auto-provisioned agent, **plus the
+     resolved project and app.**
+- **What the runtime therefore needs:** nothing stored. Not a token, not a URL, not
+  a project/app id. `PROJECT`/`APP` are never sent by the runtime — they're derived
+  from the signed claim.
+- **Customer onboarding becomes:** install the App, link the repo. That's all.
+
+### 5b — `SAKAL_TOKEN` PAT — the non-Actions fallback only
+
+- **When:** a VPS/SDK worker that is **not** in a GitHub runner, so it can't mint a
+  GitHub OIDC token (methods 4/5, dogfooding/self-host).
+- **What:** a SakalMaster PAT (`sakal_pat_…`) for a **dedicated agent account**
+  (Supabase `is_agent` user), never your personal login — attribution.
+- **How to create:** SakalMaster app → profile → API tokens → new (read+write).
+- **The productized VPS answer is NOT this PAT:** a hosted worker proves its
+  identity with a **signed GitHub App installation token** that SakalMaster
+  verifies (it holds the App) → same repo→app derivation as OIDC → no stored
+  SakalMaster secret. The raw PAT is the dogfooding shortcut, like `GH_TOKEN`.
+- **Naming (fixed 2026-07-24):** use `SAKAL_SUPABASE_URL` /
+  `SAKAL_SUPABASE_PUBLISHABLE_KEY` (SakalMaster's CLI names since session 6) — NOT
+  the ambiguous `SAKAL_URL` (reads like the web origin; the wrong value — the
+  Edge functions and PostgREST live on the **Supabase project origin**) and NOT the
+  legacy `SAKAL_ANON_KEY` (staging issues `sb_publishable_…`). The `@v1` actions
+  accept both names for one release, then cut `v2`.
+- **Live example (self-host VPS worker only):**
   ```
-  SAKAL_URL=https://<project>.supabase.co
-  SAKAL_ANON_KEY=<public anon key>
-  SAKAL_TOKEN=sakal_pat_…      # dedicated agent account, not yours
-  PROJECT=<project-uuid>
-  APP=<app-key>                # required once sakalmaster#1 (app filter) lands
+  SAKAL_SUPABASE_URL=https://<project-ref>.supabase.co   # Supabase origin, not sakal.dev
+  SAKAL_SUPABASE_PUBLISHABLE_KEY=sb_publishable_…
+  SAKAL_TOKEN=sakal_pat_…        # dedicated agent account, not yours
+  # PROJECT / APP: not set here — derived server-side from the App installation
   ```
-- **Customer path:** **auto-provisioned** — a new org's agent account is created on
-  connect; the customer mints nothing. (STATUS.md: "a new org needs nothing but
-  'connect GitHub'.")
 
-## 6–7. `SAKAL_URL`, `SAKAL_ANON_KEY`, `PROJECT`, `APP` — not secrets
+## 6–7. `SAKAL_SUPABASE_URL`, `SAKAL_SUPABASE_PUBLISHABLE_KEY`, `PROJECT`, `APP`
 
-- **What:** backend URL, the **public** anon key, and the project/app selectors.
-- **Why listed:** the worker needs them in sakalmaster mode, but they are
-  **derivable/public** — the anon key ships in the web bundle by design; URL/
-  project/app follow from the connection. **Do not treat these as secrets to
-  hand-wire per repo** (that was the STEP-3 mistake). Derive them from the link.
+- **What:** the Supabase project origin, the **public** publishable key, and the
+  project/app selectors.
+- **The mechanism (now specified):** in the OIDC path (5a) none of these are set by
+  the runtime — the URL/key are returned by `token-exchange`, and project/app are
+  derived from the signed `repository` claim. Only a self-host VPS worker (5b)
+  carries the two public backend values, and even it derives project/app from the
+  App installation. **Nothing here is a secret, and nothing here is hand-wired per
+  repo in the product.**
 
 ## 8. Production platform secrets — operator-only, ONE instance
 
@@ -185,8 +232,10 @@ Everything else is either operator setup (you, once) or a self-hosting power-up.
   (+ SOURCE=github, REPO). No SakalMaster token yet.
 - **You dogfooding the fleet:** rows 1 + 2, **one set per replica**, distinct
   accounts.
-- **Integrated flip (garage → SakalMaster):** add row 5 (+ URL/anon/project/app,
-  rows 6–7), a dedicated agent account.
+- **Integrated flip (garage → SakalMaster):** the sweep runs in GitHub Actions, so
+  **row 5a — OIDC. No stored `SAKAL_TOKEN`, no URL, no project/app.** The workflow
+  declares `id-token: write`; SakalMaster derives everything from the signed
+  `repository` claim. (The 5b PAT is only for a non-Actions VPS worker.)
 - **Standing up production:** row 8, operator-only.
 
 ## Where this is referenced (so agents find it)

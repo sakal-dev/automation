@@ -34,7 +34,7 @@
 #     actions: write         # self-redispatch (gh workflow run)
 #   jobs:
 #     sweep:
-#       uses: sakal-dev/automation/.github/workflows/sweep.yml@v1
+#       uses: sakal-dev/automation/.github/workflows/sweep.yml@v2
 #       secrets: inherit
 #
 # Self-redispatch targets the CALLER's filename, derived from
@@ -76,28 +76,26 @@ on:
         description: "Task source: github (issues queue, standalone) | sakalmaster (claim_next_task, integrated). The EXECUTE step never branches on this — only SOURCE/BRIEF/GATE do (contract invariant 6)."
         type: string
         default: "github"
+      # v2, sakalmaster mode: OIDC by default — the caller supplies NOTHING.
+      # URL + publishable key are public constants of the hosted instance
+      # (override for self-hosted); project + app come back from the OIDC
+      # exchange (the server maps the GitHub-signed repository claim), which
+      # ENFORCES invariant 4 rather than configuring it. The PAT fallback
+      # inputs exist for completeness; Actions callers should not set them.
       sakal_supabase_url:
-        description: SakalMaster SUPABASE project URL (sakalmaster mode; not the web-app origin)
+        description: SakalMaster SUPABASE project URL (hosted default; override for self-hosted)
         type: string
-        default: ""
+        default: "https://yfsempkvvdglebtlkztn.supabase.co"
       sakal_supabase_publishable_key:
-        description: Supabase publishable key, public (sakalmaster mode)
+        description: Supabase publishable key (public; hosted default)
         type: string
-        default: ""
-      sakal_url:
-        description: "DEPRECATED alias of sakal_supabase_url (removed in v2)"
-        type: string
-        default: ""
-      sakal_anon_key:
-        description: "DEPRECATED alias of sakal_supabase_publishable_key (removed in v2)"
-        type: string
-        default: ""
+        default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
       project:
-        description: SakalMaster project id, uuid (sakalmaster mode)
+        description: "PAT path only — the OIDC exchange returns it"
         type: string
         default: ""
       app:
-        description: "SakalMaster app filter for the claim (invariant 4). Forwarded only when set — requires the app-filter RPC change (sakal-dev/sakalmaster#1); until it lands, leave empty ONLY on single-app projects."
+        description: "PAT path only — the OIDC exchange returns the repo's mapped app"
         type: string
         default: ""
     # Secrets via `secrets: inherit` from the caller:
@@ -148,14 +146,14 @@ jobs:
       - name: Claim from SakalMaster
         id: sclaim
         if: ${{ inputs.source == 'sakalmaster' }}
-        uses: sakal-dev/automation/actions/claim-sakal@v1
+        uses: sakal-dev/automation/actions/claim-sakal@v2
         with:
-          sakal_supabase_url: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
-          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
           project: ${{ inputs.project }}
           app: ${{ inputs.app }}
           source: github-sweep
-          token: ${{ secrets.SAKAL_TOKEN }}
+          token: ${{ secrets.SAKAL_TOKEN }}   # empty in Actions → OIDC path
 
       # One combined go/no-go for the heavy steps, whatever the source.
       - name: Gate
@@ -197,7 +195,7 @@ jobs:
       # defaults; override per repo if needed.
       - name: Set up project (./tool/setup.sh)
         if: ${{ steps.go.outputs.has == 'true' }}
-        uses: sakal-dev/automation/actions/setup-project@v1
+        uses: sakal-dev/automation/actions/setup-project@v2
 
       - name: Run Claude sweep
         if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'github' }}
@@ -312,10 +310,10 @@ jobs:
         if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
         uses: anthropics/claude-code-action@v1
         env:
-          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
-          SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
+          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+          SAKAL_SUPABASE_PUBLISHABLE_KEY: ${{ inputs.sakal_supabase_publishable_key }}
           SAKAL_TOKEN: ${{ secrets.SAKAL_TOKEN }}
-          PROJECT: ${{ inputs.project }}
+          PROJECT: ${{ steps.sclaim.outputs.project }}
           RUN_ID: ${{ steps.sclaim.outputs.run_id }}
           TASK: ${{ steps.sclaim.outputs.task_key }}
           STORY: ${{ steps.sclaim.outputs.story_key }}
@@ -332,10 +330,15 @@ jobs:
             TASK, STORY for the curl calls below. Follow the repo's rules
             (CLAUDE.md and the rules doc it imports).
 
-            AUTH (the JWT lives ~15 min — re-exchange when needed):
+            AUTH (the JWT lives ~15 min — re-run this block when needed).
+            OIDC-first (no stored secret); PAT fallback if SAKAL_TOKEN is set:
+              if [ -n "$SAKAL_TOKEN" ]; then BODY="{\"token\":\"$SAKAL_TOKEN\"}"; else
+                OIDC=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+                BODY="{\"oidc\":\"$OIDC\"}"; fi
               JWT=$(curl -s -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
                 -H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "content-type: application/json" \
-                -d "{\"token\":\"$SAKAL_TOKEN\"}" | jq -r .access_token)
+                -d "$BODY" | jq -r .access_token)
               AUTH=(-H "apikey: $SAKAL_SUPABASE_PUBLISHABLE_KEY" -H "authorization: Bearer $JWT" -H "content-type: application/json")
 
             1. FETCH YOUR BRIEF from SakalMaster (RLS applies; read-only):
@@ -385,7 +388,7 @@ jobs:
       # run genuinely mid-flight re-asserts its own claim (brief, self-healing).
       - name: Release stuck claude-working labels
         if: ${{ always() && inputs.source == 'github' && steps.work.outputs.has == 'true' }}
-        uses: sakal-dev/automation/actions/claim-github@v1
+        uses: sakal-dev/automation/actions/claim-github@v2
         with:
           mode: release-all
           token: ${{ github.token }}
@@ -397,12 +400,12 @@ jobs:
       # rejected server-side / harmless.)
       - name: Report failed outcome (backstop)
         if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' && steps.go.outcome != 'skipped' && (failure() || cancelled()) }}
-        uses: sakal-dev/automation/actions/report-sakal@v1
+        uses: sakal-dev/automation/actions/report-sakal@v2
         with:
           mode: failed
-          sakal_supabase_url: ${{ inputs.sakal_supabase_url || inputs.sakal_url }}
-          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key || inputs.sakal_anon_key }}
-          project: ${{ inputs.project }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
+          project: ${{ steps.sclaim.outputs.project }}
           run_id: ${{ steps.sclaim.outputs.run_id }}
           error: "sweep run ${{ github.run_id }} ended without a reported outcome (step failure or cancellation)"
           token: ${{ secrets.SAKAL_TOKEN }}

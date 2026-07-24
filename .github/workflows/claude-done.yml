@@ -33,7 +33,7 @@
 #     pull-requests: read    # read the PR body / linked issues
 #   jobs:
 #     label:
-#       uses: sakal-dev/automation/.github/workflows/claude-done.yml@v1
+#       uses: sakal-dev/automation/.github/workflows/claude-done.yml@v2
 #       secrets: inherit
 # =============================================================================
 name: claude-done
