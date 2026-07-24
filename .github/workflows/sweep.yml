@@ -453,19 +453,3 @@ jobs:
           mode: release-all
           token: ${{ github.token }}
 
-      # Integrated-mode backstop — the analogue of the label release: if the
-      # agent step failed without reporting an outcome, record `failed` so the
-      # run is never left dangling until lease expiry. (An agent-reported
-      # succeeded/blocked already ended the run; this extra report is then
-      # rejected server-side / harmless.)
-      - name: Report failed outcome (backstop)
-        if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' && steps.go.outcome != 'skipped' && (failure() || cancelled()) }}
-        uses: sakal-dev/automation/actions/report-sakal@v2
-        with:
-          mode: failed
-          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
-          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
-          project: ${{ steps.sclaim.outputs.project }}
-          run_id: ${{ steps.sclaim.outputs.run_id }}
-          error: "sweep run ${{ github.run_id }} ended without a reported outcome (step failure or cancellation)"
-          token: ${{ secrets.SAKAL_TOKEN }}
