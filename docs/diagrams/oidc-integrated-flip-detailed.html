@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OIDC integrated flip — detailed</title>
+<style>
+  :root{--ink:#1b1b1f;--muted:#5b5b66;--line:#c9c9d2;--bg:#fbfbfd;--card:#ffffff;
+    --sakal:#2563eb;--gh:#e07a1a;--ai:#7c3aed;--app:#15a05a;--grey:#6b7280;--accent:#0f766e;
+    --lGH:#f3f0ec;--lRun:#eef2fb;--lSM:#eaf6ef}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5;padding:28px 20px}
+  .wrap{max-width:1040px;margin:0 auto}
+  .nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}
+  .nav a{font-size:12.5px;text-decoration:none;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:var(--card)}
+  .nav a.on{color:#fff;background:var(--ink);border-color:var(--ink)}
+  .tag{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+  h1{font-size:23px;margin:4px 0 4px}
+  .sub{color:var(--muted);margin:0 0 14px;font-size:14.5px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 10px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .board{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:8px 4px;overflow-x:auto}
+  svg{width:100%;height:auto;min-width:920px;display:block}
+  .lane-t{font-weight:800;font-size:13px}
+  .stepn{font-weight:800;font-size:12px;fill:#fff}
+  .lab{font-size:12px;fill:var(--ink)}
+  .sub2{font-size:10.5px;fill:var(--muted)}
+  .callout{margin-top:14px;font-size:13.5px;color:var(--muted);border-left:3px solid var(--app);padding:8px 0 8px 14px}
+  .callout b{color:var(--ink)}
+  code{background:#eef;padding:1px 5px;border-radius:4px;font-size:12px}
+  @media (prefers-color-scheme:dark){:root{--ink:#e8e8ee;--muted:#a6a6b3;--line:#3a3a45;--bg:#161619;--card:#20202a;
+    --sakal:#5b8cff;--gh:#f0983f;--ai:#a884f5;--app:#3fce86;--grey:#9aa0ac;--accent:#4fd1c5;
+    --lGH:#26241f;--lRun:#1c2230;--lSM:#17281f}code{background:#2b2b3a}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a href="method-3-claude-code-action.html">Method 3 · Actions</a>
+    <a href="method-4-5-vps-worker.html">Methods 4·5 · VPS</a>
+    <a href="method-1-2-dispatch-cloud.html">Methods 1·2 · Dispatch</a>
+    <a href="customer-scenarios.html">Customer setup</a>
+    <a class="on" href="oidc-integrated-flip-detailed.html">★ OIDC flip (detail)</a>
+  </nav>
+  <div class="tag">Integrated flip · zero-secret</div>
+  <h1>The garage sweep → SakalMaster, authenticated by OIDC</h1>
+  <p class="sub">How the sweep proves who it is with <b>no stored secret</b> — GitHub signs its identity, SakalMaster verifies it and derives the rest. Time flows top → bottom.</p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--ai)"></i>OIDC / identity</span>
+    <span><i class="dot" style="background:var(--sakal)"></i>SakalMaster call</span>
+    <span><i class="dot" style="background:var(--gh)"></i>GitHub write</span>
+    <span><i class="dot" style="background:var(--app)"></i>read-only App (verify)</span>
+    <span><i class="dot" style="background:var(--grey)"></i>you</span>
+  </div>
+
+  <div class="board">
+  <svg viewBox="0 0 1020 980" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Swimlane: GitHub platform, the Actions runner, and SakalMaster. The sweep requests a signed OIDC token, SakalMaster verifies it against GitHub's JWKS and derives project and app, the agent claims and works the task, opens a PR, you merge, and the server-side verifier moves the AC.">
+    <defs>
+      <marker id="m" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker>
+      <marker id="mai" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--ai)"/></marker>
+      <marker id="msk" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--sakal)"/></marker>
+      <marker id="mgh" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--gh)"/></marker>
+      <marker id="map" markerWidth="8" markerHeight="8" refX="6.5" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--app)"/></marker>
+    </defs>
+
+    <!-- lane backgrounds -->
+    <rect x="40"  y="86" width="270" height="866" rx="14" fill="var(--lGH)"/>
+    <rect x="330" y="86" width="340" height="866" rx="14" fill="var(--lRun)"/>
+    <rect x="690" y="86" width="290" height="866" rx="14" fill="var(--lSM)"/>
+    <!-- lane titles -->
+    <text class="lane-t" x="175" y="112" text-anchor="middle" fill="var(--gh)">GitHub platform</text>
+    <text class="sub2"   x="175" y="130" text-anchor="middle">OIDC · repo · PR · webhook</text>
+    <text class="lane-t" x="500" y="112" text-anchor="middle" fill="var(--ai)">Actions runner</text>
+    <text class="sub2"   x="500" y="130" text-anchor="middle">the sweep + Claude run here</text>
+    <text class="lane-t" x="835" y="112" text-anchor="middle" fill="var(--app)">SakalMaster (Supabase)</text>
+    <text class="sub2"   x="835" y="130" text-anchor="middle">token-exchange · queue · verifier</text>
+
+    <!-- STEP helper: number badge at x=20 -->
+    <!-- 1  M->L request OIDC -->
+    <g><circle cx="22" cy="168" r="12" fill="var(--ai)"/><text class="stepn" x="22" y="172" text-anchor="middle">1</text>
+      <line x1="500" y1="168" x2="185" y2="168" stroke="var(--ai)" stroke-width="2.4" marker-end="url(#mai)"/>
+      <rect x="250" y="154" width="210" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="355" y="172" text-anchor="middle">request OIDC token · <tspan font-weight="700">id-token: write</tspan></text></g>
+
+    <!-- 2 L->M signed jwt -->
+    <g><circle cx="22" cy="224" r="12" fill="var(--ai)"/><text class="stepn" x="22" y="228" text-anchor="middle">2</text>
+      <line x1="185" y1="224" x2="500" y2="224" stroke="var(--ai)" stroke-width="2.4" marker-end="url(#mai)"/>
+      <rect x="250" y="210" width="210" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="355" y="228" text-anchor="middle">signed JWT · <tspan font-weight="700">repository</tspan>, aud</text></g>
+
+    <!-- 3 M->R post to token-exchange -->
+    <g><circle cx="22" cy="280" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="284" text-anchor="middle">3</text>
+      <line x1="500" y1="280" x2="820" y2="280" stroke="var(--sakal)" stroke-width="2.4" marker-end="url(#msk)"/>
+      <rect x="560" y="266" width="210" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="665" y="284" text-anchor="middle">POST token · no stored secret</text></g>
+
+    <!-- 4 R internal verify -->
+    <g><circle cx="22" cy="352" r="12" fill="var(--app)"/><text class="stepn" x="22" y="356" text-anchor="middle">4</text>
+      <rect x="704" y="320" width="262" height="64" rx="10" fill="var(--card)" stroke="var(--app)" stroke-width="1.4"/>
+      <text class="lab" x="835" y="340" text-anchor="middle" font-weight="700">token-exchange verifies</text>
+      <text class="sub2" x="835" y="357" text-anchor="middle">sig vs GitHub JWKS · iss · exp · aud</text>
+      <text class="sub2" x="835" y="373" text-anchor="middle">repository → app → project · org agent</text></g>
+
+    <!-- 5 R->M session + resolved project/app -->
+    <g><circle cx="22" cy="420" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="424" text-anchor="middle">5</text>
+      <line x1="820" y1="420" x2="500" y2="420" stroke="var(--sakal)" stroke-width="2.4" marker-end="url(#msk)"/>
+      <rect x="540" y="406" width="250" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="665" y="424" text-anchor="middle">session + <tspan font-weight="700">project + app</tspan> resolved</text></g>
+
+    <!-- 6 M->R claim -->
+    <g><circle cx="22" cy="476" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="480" text-anchor="middle">6</text>
+      <line x1="500" y1="476" x2="820" y2="476" stroke="var(--sakal)" stroke-width="2.4" marker-end="url(#msk)"/>
+      <rect x="548" y="462" width="234" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="665" y="480" text-anchor="middle">claim_next_task(project, <tspan font-weight="700">app</tspan>)</text></g>
+
+    <!-- 7 R->M task + brief -->
+    <g><circle cx="22" cy="532" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="536" text-anchor="middle">7</text>
+      <line x1="820" y1="532" x2="500" y2="532" stroke="var(--sakal)" stroke-width="2.4" marker-end="url(#msk)"/>
+      <rect x="540" y="518" width="250" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="665" y="536" text-anchor="middle">GR-T-001 + brief · run=running</text></g>
+
+    <!-- 8 M->R heartbeat (dashed) + Claude writes -->
+    <g><circle cx="22" cy="588" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="592" text-anchor="middle">8</text>
+      <rect x="360" y="574" width="150" height="28" rx="8" fill="var(--card)" stroke="var(--ai)" stroke-width="1.3"/>
+      <text class="lab" x="435" y="592" text-anchor="middle" fill="var(--ai)">Claude writes code</text>
+      <line x1="512" y1="588" x2="820" y2="588" stroke="var(--sakal)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#msk)"/>
+      <text class="sub2" x="690" y="583" text-anchor="middle" fill="var(--sakal)">heartbeats →</text></g>
+
+    <!-- 9 M->L open PR -->
+    <g><circle cx="22" cy="644" r="12" fill="var(--gh)"/><text class="stepn" x="22" y="648" text-anchor="middle">9</text>
+      <line x1="500" y1="644" x2="185" y2="644" stroke="var(--gh)" stroke-width="2.4" marker-end="url(#mgh)"/>
+      <rect x="250" y="630" width="210" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="355" y="648" text-anchor="middle">open PR · <tspan font-weight="700">write app-token</tspan></text></g>
+
+    <!-- 10 L internal you merge -->
+    <g><circle cx="22" cy="700" r="12" fill="var(--grey)"/><text class="stepn" x="22" y="704" text-anchor="middle">10</text>
+      <rect x="70" y="686" width="210" height="28" rx="8" fill="var(--card)" stroke="var(--grey)" stroke-width="1.3"/>
+      <text class="lab" x="175" y="704" text-anchor="middle" fill="var(--grey)">YOU review + merge the PR</text></g>
+
+    <!-- 11 L->R push webhook (crosses middle) -->
+    <g><circle cx="22" cy="756" r="12" fill="var(--app)"/><text class="stepn" x="22" y="760" text-anchor="middle">11</text>
+      <line x1="185" y1="756" x2="820" y2="756" stroke="var(--app)" stroke-width="2.4" marker-end="url(#map)"/>
+      <rect x="410" y="742" width="200" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="510" y="760" text-anchor="middle">push → github-webhook</text></g>
+
+    <!-- 12 R->L read files (crosses middle) -->
+    <g><circle cx="22" cy="812" r="12" fill="var(--app)"/><text class="stepn" x="22" y="816" text-anchor="middle">12</text>
+      <line x1="820" y1="812" x2="185" y2="812" stroke="var(--app)" stroke-width="2.4" marker-end="url(#map)"/>
+      <rect x="400" y="798" width="220" height="28" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="510" y="816" text-anchor="middle">read cited .dart @sha · <tspan font-weight="700">App read</tspan></text></g>
+
+    <!-- 13 R internal verifier moves AC -->
+    <g><circle cx="22" cy="880" r="12" fill="var(--app)"/><text class="stepn" x="22" y="884" text-anchor="middle">13</text>
+      <rect x="704" y="850" width="262" height="60" rx="10" fill="var(--card)" stroke="var(--app)" stroke-width="1.4"/>
+      <text class="lab" x="835" y="872" text-anchor="middle" font-weight="700">Dart verifier resolves citations</text>
+      <text class="sub2" x="835" y="892" text-anchor="middle">verifier@ moves the AC · verified / broken</text></g>
+
+    <!-- 14 R internal dashboard -->
+    <g><circle cx="22" cy="934" r="12" fill="var(--sakal)"/><text class="stepn" x="22" y="938" text-anchor="middle">14</text>
+      <rect x="704" y="920" width="262" height="26" rx="8" fill="var(--card)" stroke="var(--line)"/>
+      <text class="lab" x="835" y="938" text-anchor="middle">Team·Agents shows it · History signs each actor</text></g>
+  </svg>
+  </div>
+
+  <p class="callout"><b>Secrets stored on the garage repo: 0.</b> The runner holds no <code>SAKAL_TOKEN</code>, no URL, no project/app — GitHub signs its <code>repository</code> identity (steps 1–2), SakalMaster verifies it against GitHub's public keys and derives project + app from data it already holds (steps 3–5). A customer's whole setup is: <b>install the App, link the repo.</b> &nbsp;·&nbsp; The one credential still in play is the <b>write app-token</b> for opening the PR (step 9) — the read-only "Sakal Master" App can't write, by design.</p>
+</div>
+</body>
+</html>
