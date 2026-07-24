@@ -50,7 +50,31 @@ and (only with the human) relabels.
    `vX.Y.Z` pin.
 4. After merge: one `workflow_dispatch` sweep as a smoke test.
 
-## Diagnose — the checklist (answers inline, from the constraints doc)
+## FIRST: which mode is this repo in?
+
+`grep "source:" .github/workflows/claude-daily-sweep.yml` — a
+`source: sakalmaster` line means INTEGRATED (SakalMaster is the queue;
+GitHub issues are a MIRROR — the sweep must never drain `claude-ready`
+labels in this mode, and "queue an issue" means seed a task in SakalMaster
+instead). No line (or `github`) = standalone. Every diagnosis below starts
+with this check; rollback between modes is that one line (drilled — see
+`docs/RUNBOOK.md` §4).
+
+## Diagnose, integrated mode (sakalmaster)
+
+- **Run green but SakalMaster shows nothing** → the silent-lifecycle
+  signature, `docs/RUNBOOK.md` §1. Engine ≥v2.0.1 makes it impossible;
+  upgrade if older.
+- **Claim step fails** → OIDC: caller must grant `id-token: write`; the repo
+  must be linked (`apps.github_repo`) in SakalMaster; audience is pinned
+  `sakalmaster`. Exchange errors name the missing piece.
+- **Task re-served after success** → succeeded does NOT retire a task; the
+  judge parks it (`agent_ready=false`). If unparked, the judge step was
+  skipped — check its log.
+- **Stale `queued`/`running` runs** → leases self-heal: the next claim
+  retires them `abandoned`. Nothing to clean by hand.
+
+## Diagnose, standalone mode — the checklist (answers inline)
 
 **"The sweep didn't run."**
 - Cron is UTC and best-effort: minutes late is normal, ~an hour under load
