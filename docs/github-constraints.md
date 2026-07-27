@@ -62,12 +62,24 @@ human reply, every bot note — not just `@claude` mentions.
 guard so a non-matching comment decides and exits in ~1 second, before any
 checkout or setup spends minutes of runner time.
 
-## 7. Events made with `GITHUB_TOKEN` do not trigger workflows
+## 7. Events made with `GITHUB_TOKEN` do not trigger workflows — except `workflow_dispatch`
 
 **The fact.** The recursion guard behind constraint #3 is broader than PRs: a
 comment, label, or push created with the workflow's own `GITHUB_TOKEN` fires no
 `issue_comment`, `labeled`, or `push` workflow at all. The API call succeeds;
 nothing downstream ever runs.
+
+**The exception, and the engine depends on it:** `workflow_dispatch` and
+`repository_dispatch` are explicitly carved out of the guard. That is why the
+sweep's mechanical self-redispatch (`gh workflow run <caller>` with
+`GITHUB_TOKEN`, v2.1.0) works at all. Do not "fix" it by adding a PAT.
+
+**Reading the evidence:** a chain-fired run is indistinguishable from a human
+one by actor — a `workflow_dispatch` run created by `GITHUB_TOKEN` is
+attributed to the actor of the run that dispatched it, and for a scheduled run
+that is whoever last touched the workflow file. **The only reliable proof the
+chain fired is the `Continue the chain` step's own `::notice::` in the
+PRECEDING run.** Never infer it from the event type or the actor.
 
 **What we do.** No engine step ever hands work to another workflow by writing an
 event and hoping. The review loop needed exactly that — "post `@claude` on the
