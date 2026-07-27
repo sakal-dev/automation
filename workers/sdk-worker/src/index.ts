@@ -44,8 +44,17 @@ async function lifecycle(cmd: string, args: string[] = [], env = {}) {
   return stdout.trim() ? JSON.parse(stdout.trim().split("\n").pop()!) : {};
 }
 
+/** Exit code 2 from the lifecycle CLI = POLICY STOP (method rejected). It must
+ * kill the process, not bubble into main's catch-and-retry — a misconfigured
+ * executor has to be loud, and a retry storm is the opposite of loud. */
 async function runOneTask(): Promise<boolean> {
-  const claim = await lifecycle("claim");
+  const claim = await lifecycle("claim").catch((e: any) => {
+    if (e?.code === 2) {
+      console.error("[worker] POLICY STOP — this runtime is not an allowed execution method for this app. Not retrying.");
+      process.exit(2);
+    }
+    throw e;
+  });
   if (!claim.claimed) return false;
   const taskEnv = {
     TASK_REF: claim.task_ref, RUN_ID: claim.run_id ?? "", STORY_KEY: claim.story_key ?? "",
