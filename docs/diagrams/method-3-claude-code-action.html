@@ -51,60 +51,84 @@
     <span><i class="dot" style="background:var(--ai)"></i>Claude AI token</span>
     <span><i class="dot" style="background:var(--gh)"></i>GitHub write</span>
     <span><i class="dot" style="background:var(--app)"></i>read-only App (verify)</span>
+    <span><i class="dot" style="background:var(--sakal)"></i>SakalMaster · OIDC, no secret</span>
   </div>
   <div class="board">
-  <svg viewBox="0 0 940 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Pipeline: task on GitHub, Actions runs Claude, opens PR, you merge, App verifies.">
+  <svg viewBox="0 0 940 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SakalMaster at top. A scheduled sweep claims a task by OIDC, Actions runs Claude, opens a PR, you merge, the App verifies. The run is reported back to SakalMaster.">
+    <defs>
+      <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker>
+      <marker id="ab" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--sakal)"/></marker>
+      <marker id="ag" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--app)"/></marker>
+    </defs>
+
+    <!-- SakalMaster top bar: in integrated mode the queue lives here -->
+    <rect x="10" y="12" width="920" height="56" rx="13" fill="var(--card)" stroke="var(--sakal)" stroke-width="1.75"/>
+    <text class="n-t" x="30" y="37" fill="var(--sakal)">SakalMaster (Supabase)</text>
+    <text class="n-s" x="30" y="55">the queue · run dashboard · verifier — the sweep claims from here, by OIDC</text>
     <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--muted)"/></marker></defs>
     <!-- 5 nodes -->
     <g>
-      <rect class="box" x="10" y="26" width="168" height="112" rx="13"/>
-      <text class="n-t" x="94" y="58" text-anchor="middle">1 · Task appears</text>
-      <text class="n-s" x="94" y="77" text-anchor="middle">label or @claude</text>
-      <rect x="30" y="94" width="128" height="26" rx="13" fill="none" stroke="var(--grey)" stroke-width="1.5"/>
-      <text x="94" y="111" text-anchor="middle" font-size="11" fill="var(--grey)" font-weight="700">you</text>
+      <rect class="box" x="10" y="176" width="168" height="112" rx="13"/>
+      <text class="n-t" x="94" y="208" text-anchor="middle">1 · Claim a task</text>
+      <text class="n-s" x="94" y="227" text-anchor="middle">cron sweep · or @claude</text>
+      <rect x="30" y="244" width="128" height="26" rx="13" fill="none" stroke="var(--sakal)" stroke-width="1.5"/>
+      <text x="94" y="261" text-anchor="middle" font-size="10" fill="var(--sakal)" font-weight="700">OIDC · no secret</text>
     </g>
     <g>
-      <rect class="box" x="198" y="26" width="168" height="112" rx="13"/>
-      <text class="n-t" x="282" y="58" text-anchor="middle">2 · Actions runs</text>
-      <text class="n-s" x="282" y="77" text-anchor="middle">Claude, in the runner</text>
-      <rect x="218" y="94" width="128" height="26" rx="13" fill="none" stroke="var(--ai)" stroke-width="1.5"/>
-      <text x="282" y="111" text-anchor="middle" font-size="10.5" fill="var(--ai)" font-weight="700">CLAUDE token</text>
+      <rect class="box" x="198" y="176" width="168" height="112" rx="13"/>
+      <text class="n-t" x="282" y="208" text-anchor="middle">2 · Actions runs</text>
+      <text class="n-s" x="282" y="227" text-anchor="middle">Claude, in the runner</text>
+      <rect x="218" y="244" width="128" height="26" rx="13" fill="none" stroke="var(--ai)" stroke-width="1.5"/>
+      <text x="282" y="261" text-anchor="middle" font-size="10.5" fill="var(--ai)" font-weight="700">CLAUDE token</text>
     </g>
     <g>
-      <rect class="box" x="386" y="26" width="168" height="112" rx="13"/>
-      <text class="n-t" x="470" y="58" text-anchor="middle">3 · Opens a PR</text>
-      <text class="n-s" x="470" y="77" text-anchor="middle">CI fires</text>
-      <rect x="406" y="94" width="128" height="26" rx="13" fill="none" stroke="var(--gh)" stroke-width="1.5"/>
-      <text x="470" y="111" text-anchor="middle" font-size="10.5" fill="var(--gh)" font-weight="700">write app-token</text>
+      <rect class="box" x="386" y="176" width="168" height="112" rx="13"/>
+      <text class="n-t" x="470" y="208" text-anchor="middle">3 · Opens a PR</text>
+      <text class="n-s" x="470" y="227" text-anchor="middle">CI fires</text>
+      <rect x="406" y="244" width="128" height="26" rx="13" fill="none" stroke="var(--gh)" stroke-width="1.5"/>
+      <text x="470" y="261" text-anchor="middle" font-size="10.5" fill="var(--gh)" font-weight="700">write app-token</text>
     </g>
     <g>
-      <rect class="box" x="574" y="26" width="168" height="112" rx="13"/>
-      <text class="n-t" x="658" y="58" text-anchor="middle">4 · You merge</text>
-      <text class="n-s" x="658" y="77" text-anchor="middle">after review</text>
-      <rect x="594" y="94" width="128" height="26" rx="13" fill="none" stroke="var(--grey)" stroke-width="1.5"/>
-      <text x="658" y="111" text-anchor="middle" font-size="11" fill="var(--grey)" font-weight="700">you</text>
+      <rect class="box" x="574" y="176" width="168" height="112" rx="13"/>
+      <text class="n-t" x="658" y="208" text-anchor="middle">4 · You merge</text>
+      <text class="n-s" x="658" y="227" text-anchor="middle">after review</text>
+      <rect x="594" y="244" width="128" height="26" rx="13" fill="none" stroke="var(--grey)" stroke-width="1.5"/>
+      <text x="658" y="261" text-anchor="middle" font-size="11" fill="var(--grey)" font-weight="700">you</text>
     </g>
     <g>
-      <rect class="box" x="762" y="26" width="168" height="112" rx="13"/>
-      <text class="n-t" x="846" y="58" text-anchor="middle">5 · Verify</text>
-      <text class="n-s" x="846" y="77" text-anchor="middle">AC moves, auto</text>
-      <rect x="782" y="94" width="128" height="26" rx="13" fill="none" stroke="var(--app)" stroke-width="1.5"/>
-      <text x="846" y="111" text-anchor="middle" font-size="10.5" fill="var(--app)" font-weight="700">read-only App</text>
+      <rect class="box" x="762" y="176" width="168" height="112" rx="13"/>
+      <text class="n-t" x="846" y="208" text-anchor="middle">5 · Verify</text>
+      <text class="n-s" x="846" y="227" text-anchor="middle">AC moves, auto</text>
+      <rect x="782" y="244" width="128" height="26" rx="13" fill="none" stroke="var(--app)" stroke-width="1.5"/>
+      <text x="846" y="261" text-anchor="middle" font-size="10.5" fill="var(--app)" font-weight="700">read-only App</text>
     </g>
     <!-- arrows -->
     <line x1="179" y1="82" x2="197" y2="82" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
     <line x1="367" y1="82" x2="385" y2="82" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
     <line x1="555" y1="82" x2="573" y2="82" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
     <line x1="743" y1="82" x2="761" y2="82" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <!-- horizontal chain -->
+    <line x1="179" y1="232" x2="197" y2="232" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="367" y1="232" x2="385" y2="232" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="555" y1="232" x2="573" y2="232" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+    <line x1="743" y1="232" x2="761" y2="232" stroke="var(--muted)" stroke-width="2.5" marker-end="url(#a)"/>
+
+    <!-- SakalMaster → claim (down), and the run reported back (up) -->
+    <line x1="94" y1="70" x2="94" y2="174" stroke="var(--sakal)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ab)"/>
+    <text x="104" y="120" font-size="10.5" fill="var(--sakal)">claim · report run</text>
+
+    <!-- verify pushes derived status back up -->
+    <line x1="846" y1="174" x2="846" y2="70" stroke="var(--app)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ag)"/>
+    <text x="700" y="120" font-size="10.5" fill="var(--app)" text-anchor="end">push webhook → verify</text>
   </svg>
   </div>
   <div class="facts">
     <div class="fact"><b>Runs where</b>GitHub cloud runner</div>
-    <div class="fact"><b>Triggered by</b>@claude / sweep</div>
+    <div class="fact"><b>Triggered by</b>cron sweep / @claude</div>
     <div class="fact"><b>Your server?</b>None</div>
     <div class="fact"><b>Good for</b>simple repo-native jobs</div>
   </div>
-  <p class="note">No VPS, no <code>GH_TOKEN</code> PAT to manage — it all lives inside GitHub. Trade-off: it reacts to triggers, it can't poll a queue on its own.</p>
+  <p class="note">No VPS, no <code>GH_TOKEN</code> PAT to manage — it all lives inside GitHub. In <b>integrated</b> mode a scheduled sweep <b>does</b> poll SakalMaster's queue (<code>claim_next_task</code>, one leased task per run) and reports the run back; it authenticates by <b>GitHub OIDC</b>, so there is no <code>SAKAL_TOKEN</code> to store — just <code>id-token: write</code>. Trade-off: work happens only when a trigger fires (cron or <code>@claude</code>), so latency is your cron interval, not a live worker.</p>
 </div>
 </body>
 </html>
