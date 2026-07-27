@@ -87,14 +87,18 @@ The reverse is equally binding: if a maintainer re-applies `claude-blocked`,
 it is blocked, whatever you concluded.
 
 `claude-blocked` and `claude-ready` are **mutually exclusive** — an issue is
-never both. If you find both, the block is stale; the queue label wins and the
-engine repairs it.
+never both. If you find both, SAY SO and change nothing: the labels are the
+maintainer's steering wheel, not yours. The same goes for a question a
+maintainer has settled — you must not re-block it, and you must not clear the
+block either. Refusing to re-ask is the whole of your authority here.
 
-**The trade-off, stated honestly:** the engine's rule is *positional* — ANY
-maintainer comment after the block counts as the answer, even "hmm, looking
-into this". It cannot read intent, and guessing at intent is how you get an
-agent that argues with its owner. A settled-too-early question costs one
-comment to re-block; a question the agent re-asks forever costs trust.
+**The trade-off, stated honestly:** the rule is *positional* — ANY maintainer
+comment after the block counts as the answer, even "hmm, looking into this".
+It cannot read intent, and guessing at intent is how you get an agent that
+argues with its owner. The blast radius is small precisely because the gate is
+passive: settling a question early only means you stop re-asking it — nothing
+gets queued, nothing gets worked, no money is spent. The human's next label
+click decides everything.
 
 ## 10. End-of-session duty — the changelog
 

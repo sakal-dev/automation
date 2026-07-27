@@ -17,12 +17,17 @@
 # both modes. Rule 4 (mirror mismatch) only activates when integrated.
 #
 # MODES
-#   scan     pre-flight. Classifies every `claude-blocked` issue, fixes the
-#            label invariant, pins settled decisions once, and emits a
-#            prompt-injectable SETTLED block. Outputs: settled_block, settled_count.
-#   enforce  post-flight (call from always()). If the run re-blocked a SETTLED
-#            issue without new evidence, the label is REMOVED and the loop is
-#            named in one comment. The mechanical backstop to the prompt.
+#   scan     pre-flight. Classifies every `claude-blocked` issue, pins settled
+#            decisions once (a comment — the cache), warns about contradictory
+#            labels, and emits the prompt-injectable SETTLED block.
+#   enforce  post-flight (call from always()). Re-checks; if the run re-blocked
+#            a settled question it says so loudly. PASSIVE: it does not undo the
+#            label — a human does. The gate's power is refusing to re-block in
+#            the first place, not out-editing the human afterwards.
+#
+# PASSIVITY (SKA-008): by default this action makes ZERO label writes. It reads
+# the thread and posts at most one marker comment. The operator steers the
+# queue; the engine just stops re-asking answered questions.
 #
 # AUTHORITY MODEL (deliberately simple; stated plainly in RULES so nobody has
 # to read this file to know it):
@@ -76,6 +81,10 @@ inputs:
     description: "Space-separated issue numbers to scope to (default: every blocked/decided issue). Scoping exists because repairing a label is free but re-queueing an issue costs an agent run — an operator may want one, not all."
     required: false
     default: ""
+  repair:
+    description: "OPT-IN label steering (default false). When true the gate removes a stale block, adds the decided marker label, and re-queues — i.e. THE AUTOMATION STEERS YOUR LABELS. Most repos should not want this: labels are how a human directs the queue, and an engine that edits them is an engine that argues with its owner. Every mutation is announced with ::notice::."
+    required: false
+    default: "false"
   dry_run:
     description: "true = classify and log only; write nothing"
     required: false
@@ -107,5 +116,6 @@ runs:
         L_READY: ${{ inputs.ready_label }}
         L_DECIDED: ${{ inputs.decided_label }}
         ONLY: ${{ inputs.issues }}
+        REPAIR: ${{ inputs.repair }}
         DRY: ${{ inputs.dry_run }}
       run: bash "${{ github.action_path }}/gate.sh"

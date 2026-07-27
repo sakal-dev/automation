@@ -92,21 +92,29 @@ with this check; rollback between modes is that one line (drilled — see
 **"The bot keeps re-asking a question I already answered."**
 - Fixed in engine v2.3.0 (`actions/authority-gate`). Older engines re-derive
   every run and treat their own analysis as senior to a human — upgrade.
-- On v2.3.0+: your answer settles it permanently. The gate pins a "decision
-  recorded" comment, adds `claude-decided`, drops `claude-blocked`, and tells
-  the next agent the question is closed.
-- To re-block deliberately: re-add `claude-blocked` yourself — a maintainer's
-  block is authoritative the other way.
-- To re-open it for the agent: change the spec ledger. Only a moved ledger
-  counts as new evidence.
-- Positional rule, stated plainly: ANY maintainer comment after the block
-  settles it. A stray "looking into this" will settle a question — re-add the
-  label if that happens.
+- On v2.4.0+ (PASSIVE): your answer settles it permanently — the gate pins one
+  "decision recorded" comment and tells the next agent the question is closed.
+  It does **not** touch labels. **You** clear `claude-blocked` and re-add
+  `claude-ready` when you want it worked. (v2.3.0 DID edit labels; that was
+  reverted as unwanted — do not pin a caller to v2.3.0.)
+- To re-block deliberately: re-add `claude-blocked` — authoritative, no argument.
+- To re-open the question for the agent: change the spec ledger. Only a moved
+  ledger counts as new evidence.
+- Positional rule: ANY maintainer comment after the block settles it, even
+  "looking into this". Small blast radius now — the gate only stops re-asking;
+  it queues nothing.
+
+**"I answered and removed `claude-blocked`, but the sweep never picks it up."**
+- Check for `claude-ready`. Removing the block does not queue an issue — the
+  two labels are separate instruments, and the engine will not add `claude-ready`
+  for you (by design, since v2.4.0). Add it and the next sweep takes it.
+- This is the #1 expected symptom of the passive gate. It is not an engine
+  fault; it is the engine declining to steer.
 
 **"An issue has both `claude-blocked` and `claude-ready`."**
-- The engine repairs this on sight now (label invariant). If you see it on a
-  current engine, the sweep hasn't run since it happened — dispatch one, or
-  run `authority-gate` scoped to that issue.
+- The gate WARNS and changes nothing (`::warning::` naming the issue). Clear
+  one yourself — whichever is stale. The engine deliberately will not choose,
+  because choosing means overriding a human label.
 
 ## Diagnose, standalone mode — the checklist (answers inline)
 
