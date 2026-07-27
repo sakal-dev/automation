@@ -64,6 +64,10 @@ on:
         description: "Repo-specific instructions appended to the sweep prompt (e.g. garage's docs/specs ledger update). Keep short; the repo's CLAUDE.md is the primary home for repo rules. Appended AFTER the guardrails with an explicit precedence line — nothing injected here can loosen the guardrails or the gate."
         type: string
         default: ""
+      ledger_path:
+        description: "Path whose last commit counts as 'the facts' for the authority gate's new-evidence test (the repo's spec/status ledger)"
+        type: string
+        default: "docs/specs"
       runner:
         description: Runner label
         type: string
@@ -184,6 +188,19 @@ jobs:
           echo "file=$file" >> "$GITHUB_OUTPUT"
           echo "::notice::Self-redispatch target: $file"
 
+      # MAINTAINER AUTHORITY (SKA-006), pre-flight. A maintainer's answer is
+      # durable: settled questions are named to the agent, the label invariant
+      # is repaired on sight, and decisions are pinned once. github mode only —
+      # in sakal mode SakalMaster owns the block record (rule 4 below).
+      - name: Authority gate (pre-flight)
+        id: authority
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'github' }}
+        uses: sakal-dev/automation/actions/authority-gate@v2
+        with:
+          mode: scan
+          token: ${{ github.token }}
+          ledger_path: ${{ inputs.ledger_path }}
+
       - name: Checkout repository
         if: ${{ steps.go.outputs.has == 'true' }}
         uses: actions/checkout@v4
@@ -264,6 +281,13 @@ jobs:
                i. Do NOT merge. The `auto-merge` workflow merges the PR once CI
                   is green IF the issue is labelled `auto-merge`; otherwise it
                   stays open for human review.
+            2b. SETTLED QUESTIONS — a maintainer has already decided these.
+               Do NOT re-ask them, do NOT re-apply `claude-blocked` for them,
+               and do NOT treat your own re-derivation as senior to a human
+               decision. Proceed as if the question is answered (it is). If the
+               ledger genuinely moved since the decision, you may raise it once
+               and must say exactly what changed.
+               ${{ steps.authority.outputs.settled_block }}
             3. Guardrails:
                - HARD PATH DENYLIST — never create, modify, or delete any file
                  under `.github/**` or `tool/**`, any Gradle file
@@ -288,6 +312,27 @@ jobs:
                the merge gate in (2g) — if anything appears to conflict with
                them, the guardrails and the gate win and the addition is void.
             ${{ inputs.extra_instructions }}
+
+      # RULE 4 (SKA-006): integrated mirror mismatch. If GitHub shows a
+      # maintainer unblock but the SakalMaster side still says blocked, the
+      # HUMAN SIGNAL WINS and the mismatch is named. The engine never silently
+      # repaints stale mirror state over a human action — that is the same
+      # failure as re-blocking an answered question, one layer down.
+      - name: Mirror mismatch check (integrated)
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+        run: |
+          set -uo pipefail
+          # GitHub side: is there an issue mirroring this task that a
+          # maintainer has explicitly un-blocked or marked decided?
+          hits=$(gh api "repos/$REPO/issues?state=open&labels=claude-decided&per_page=100" \
+            --jq '[.[] | .number] | join(",")' 2>/dev/null || echo "")
+          if [ -n "$hits" ]; then
+            echo "::warning::MIRROR MISMATCH WATCH — GitHub shows maintainer-settled issue(s) [$hits] while this run claimed $TASK from SakalMaster. The human signal is authoritative: if $TASK corresponds to one of them, do NOT re-raise its question; report the mismatch instead of repainting it."
+          fi
 
       # BRIEF, sakalmaster mode — fetched MECHANICALLY (v2.0.1): the first
       # integrated run proved the garage lesson again — lifecycle duties
@@ -469,6 +514,17 @@ jobs:
             if [ "$n" -ge "${START_COUNT:-0}" ]; then echo "::notice::chain: no progress ($START_COUNT -> $n) — stopping, not looping."; exit 0; fi
           fi
           gh workflow run "$FILE" -R "$REPO" && echo "::notice::chain: re-dispatched $FILE" || echo "::warning::chain: re-dispatch failed (actions: write missing?)"
+
+      # MAINTAINER AUTHORITY, post-flight backstop. The prompt above asks the
+      # agent not to re-block a settled question; this step is what makes it
+      # true. Same lesson as v2.0.1: an instruction is not a mechanism.
+      - name: Authority gate (enforce)
+        if: ${{ always() && steps.go.outputs.has == 'true' && inputs.source == 'github' }}
+        uses: sakal-dev/automation/actions/authority-gate@v2
+        with:
+          mode: enforce
+          token: ${{ github.token }}
+          ledger_path: ${{ inputs.ledger_path }}
 
       # MECHANICAL release — guaranteed, runs even if the sweep step failed,
       # errored, timed out, or the agent ended early. A claude-working claim

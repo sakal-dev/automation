@@ -273,7 +273,20 @@ one is a regression, not a redesign.
    gradle/keystores, `.env*` are untouchable by executors, enforced in the
    gate-side prompt/config an executor cannot edit (see invariant 3's
    trust boundary and the denylist itself, which protects it).
-8. **Every write is attributed.** Claims, runs, PRs, and reports carry the
+8. **A maintainer's answer is authoritative and durable.** When a human with
+   write access answers a blocked question, that answer outranks any amount of
+   the executor's own re-derivation — forever, not until the next run. An
+   executor may re-raise a settled question ONLY when the facts it derives
+   from have actually changed, and must say what changed; "I reached the same
+   conclusion again" is not new evidence. The symmetry holds both ways: a
+   maintainer re-applying the block is equally authoritative. Corollary: the
+   block state and the queue state are mutually exclusive — an item is never
+   both blocked and queued, and any executor that sees both repairs it.
+   *(Enforced mechanically by `actions/authority-gate`; earned by garage#22,
+   where the sweep re-asked a question the maintainer had answered and left
+   the issue carrying both labels.)*
+
+9. **Every write is attributed.** Claims, runs, PRs, and reports carry the
    identity of the actor (app token on GitHub; PAT-attributed writes in
    SakalMaster).
 

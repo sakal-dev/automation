@@ -1,0 +1,111 @@
+# =============================================================================
+# authority-gate — maintainer authority over the block loop (SKA-006).
+#
+# THE DEFECT (garage#22, observed 2026-07-21..22): the bot blocked an AC with a
+# product question; the maintainer answered decisively and removed
+# `claude-blocked`; the next sweep re-derived from code + ledger, treated its
+# own prior analysis as senior to the human, re-asked the same question, and
+# re-applied the label — leaving the issue carrying BOTH `claude-blocked` and
+# `claude-ready`. An agent that can ignore a human decision is not an
+# assistant; it is a loop.
+#
+# THE RULE: a maintainer's answer is AUTHORITATIVE and durable. The engine
+# enforces that mechanically, because the engine's own hard-won lesson is that
+# a prompt instruction is not a mechanism (v2.0.1). Read before you block.
+#
+# Works with NO SakalMaster dependency: GitHub's own thread is the record in
+# both modes. Rule 4 (mirror mismatch) only activates when integrated.
+#
+# MODES
+#   scan     pre-flight. Classifies every `claude-blocked` issue, fixes the
+#            label invariant, pins settled decisions once, and emits a
+#            prompt-injectable SETTLED block. Outputs: settled_block, settled_count.
+#   enforce  post-flight (call from always()). If the run re-blocked a SETTLED
+#            issue without new evidence, the label is REMOVED and the loop is
+#            named in one comment. The mechanical backstop to the prompt.
+#
+# AUTHORITY MODEL (deliberately simple; stated plainly in RULES so nobody has
+# to read this file to know it):
+#   maintainer = author_association OWNER|MEMBER|COLLABORATOR **and** a real
+#   user (type != Bot, login not `*[bot]`). The engine's own comments carry
+#   MEMBER-ish associations in some setups — without the bot exclusion the
+#   sweep could "answer" its own question.
+#   settled    = a maintainer signal (comment, or removing `claude-blocked`)
+#                AFTER the bot's most recent block comment.
+#   re-blocked = a MAINTAINER re-adding `claude-blocked` after that signal —
+#                authoritative the other way. Symmetry is the whole safety net.
+#
+# NEW EVIDENCE (rule 2): a settled question may be re-raised only when the
+# ledger actually moved — the marker records the last commit sha touching
+# `ledger_path` at pin time; a differing sha today is new evidence, and the
+# agent must say what changed. "I re-derived the same conclusion" is not
+# evidence and cannot pass this gate.
+#
+# MARKER: `claude-decided` label (cheap cache) + an HTML marker inside the pin
+# comment (the durable record). The gate rests on the THREAD, never on the
+# marker — deleting the label or the comment cannot resurrect the loop,
+# because the maintainer's answer is still in the thread.
+# =============================================================================
+name: authority-gate
+description: "Maintainer answers are authoritative and durable: never re-block a settled question; enforce the label invariant"
+
+inputs:
+  mode:
+    description: "scan (pre-flight) | enforce (post-flight, from always())"
+    required: true
+  token:
+    description: Token with issues:write on the caller repo
+    required: true
+  ledger_path:
+    description: "Path whose last-commit sha counts as 'the facts' for new-evidence detection (the spec ledger)"
+    required: false
+    default: "docs/specs"
+  blocked_label:
+    description: The block label
+    required: false
+    default: "claude-blocked"
+  ready_label:
+    description: The queue label (mutually exclusive with blocked)
+    required: false
+    default: "claude-ready"
+  decided_label:
+    description: The settled marker label
+    required: false
+    default: "claude-decided"
+  issues:
+    description: "Space-separated issue numbers to scope to (default: every blocked/decided issue). Scoping exists because repairing a label is free but re-queueing an issue costs an agent run — an operator may want one, not all."
+    required: false
+    default: ""
+  dry_run:
+    description: "true = classify and log only; write nothing"
+    required: false
+    default: "false"
+
+outputs:
+  settled_block:
+    description: Prompt-injectable text naming every settled question (empty when none)
+    value: ${{ steps.gate.outputs.settled_block }}
+  settled_count:
+    description: How many issues are settled by a maintainer
+    value: ${{ steps.gate.outputs.settled_count }}
+  fixed_count:
+    description: How many label-invariant violations or stale blocks were repaired
+    value: ${{ steps.gate.outputs.fixed_count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authority gate
+      id: gate
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        MODE: ${{ inputs.mode }}
+        LEDGER: ${{ inputs.ledger_path }}
+        L_BLOCKED: ${{ inputs.blocked_label }}
+        L_READY: ${{ inputs.ready_label }}
+        L_DECIDED: ${{ inputs.decided_label }}
+        ONLY: ${{ inputs.issues }}
+        DRY: ${{ inputs.dry_run }}
+      run: bash "${{ github.action_path }}/gate.sh"

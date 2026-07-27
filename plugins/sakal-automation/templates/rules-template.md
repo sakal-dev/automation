@@ -74,7 +74,29 @@ yourself to remember). The sweep and other runs skip issues carrying it, or
 `claude-blocked`, or with an open linked PR. Lifecycle:
 `claude-ready → claude-working → claude-done → closed on merge`.
 
-## 9. End-of-session duty — the changelog
+## 9. A maintainer's answer ends the question
+
+When you block and a maintainer answers — in a comment, or by removing
+`claude-blocked` — **that decision is final and durable.** Do not re-ask it on
+the next run, do not re-apply the label, and never treat your own fresh
+analysis as senior to a human decision. You may raise it again ONLY if the
+spec ledger actually changed since the answer, and then you must say exactly
+what changed.
+
+The reverse is equally binding: if a maintainer re-applies `claude-blocked`,
+it is blocked, whatever you concluded.
+
+`claude-blocked` and `claude-ready` are **mutually exclusive** — an issue is
+never both. If you find both, the block is stale; the queue label wins and the
+engine repairs it.
+
+**The trade-off, stated honestly:** the engine's rule is *positional* — ANY
+maintainer comment after the block counts as the answer, even "hmm, looking
+into this". It cannot read intent, and guessing at intent is how you get an
+agent that argues with its owner. A settled-too-early question costs one
+comment to re-block; a question the agent re-asks forever costs trust.
+
+## 10. End-of-session duty — the changelog
 
 Before finishing, append one entry to `docs/CHANGELOG-RECENT.md` (format
 inside the file) and rotate the oldest entry beyond 10 into

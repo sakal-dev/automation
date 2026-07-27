@@ -89,6 +89,25 @@ with this check; rollback between modes is that one line (drilled — see
   `unprovable` in the message = a token minted before `sakal_auth` existed;
   it self-clears within the 15-minute JWT TTL — just re-run.
 
+**"The bot keeps re-asking a question I already answered."**
+- Fixed in engine v2.3.0 (`actions/authority-gate`). Older engines re-derive
+  every run and treat their own analysis as senior to a human — upgrade.
+- On v2.3.0+: your answer settles it permanently. The gate pins a "decision
+  recorded" comment, adds `claude-decided`, drops `claude-blocked`, and tells
+  the next agent the question is closed.
+- To re-block deliberately: re-add `claude-blocked` yourself — a maintainer's
+  block is authoritative the other way.
+- To re-open it for the agent: change the spec ledger. Only a moved ledger
+  counts as new evidence.
+- Positional rule, stated plainly: ANY maintainer comment after the block
+  settles it. A stray "looking into this" will settle a question — re-add the
+  label if that happens.
+
+**"An issue has both `claude-blocked` and `claude-ready`."**
+- The engine repairs this on sight now (label invariant). If you see it on a
+  current engine, the sweep hasn't run since it happened — dispatch one, or
+  run `authority-gate` scoped to that issue.
+
 ## Diagnose, standalone mode — the checklist (answers inline)
 
 **"The sweep didn't run."**

@@ -95,6 +95,19 @@ jobs:
           issue: ${{ github.event.issue.number }}
           token: ${{ github.token }}
 
+      # MAINTAINER AUTHORITY (SKA-006). A human typed @claude, so the human is
+      # already in the loop here — but the on-demand agent CAN also apply
+      # `claude-blocked`, so it can re-block a question a maintainer settled
+      # yesterday. Same gate, same reason; cheap (one API read).
+      - name: Authority gate (pre-flight)
+        id: authority
+        if: ${{ steps.claim.outputs.already-owned != 'true' && github.event.issue.number }}
+        uses: sakal-dev/automation/actions/authority-gate@v2
+        with:
+          mode: scan
+          token: ${{ github.token }}
+          issues: ${{ github.event.issue.number }}
+
       - name: Checkout repository
         if: ${{ steps.claim.outputs.already-owned != 'true' }}
         uses: actions/checkout@v4
@@ -151,7 +164,7 @@ jobs:
           claude_args: >-
             --model ${{ steps.model.outputs.name }}
             --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"
-            --append-system-prompt "Follow this repo's rules (CLAUDE.md and the
+            --append-system-prompt "${{ steps.authority.outputs.settled_count != '0' && 'A MAINTAINER HAS ALREADY SETTLED A QUESTION ON THIS ISSUE — do not re-ask it and do not apply claude-blocked for it; their answer is authoritative and durable. ' || '' }}Follow this repo's rules (CLAUDE.md and the
             rules doc it imports). Before opening any pull request you MUST run
             ./tool/verify.sh from the repo root and it MUST exit 0 — it is the
             repo's own definition of checks-pass, the same gate CI runs; open
