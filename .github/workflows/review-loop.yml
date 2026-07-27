@@ -1,0 +1,692 @@
+# =============================================================================
+# review-loop.yml — the PR REVIEW LOOP (METHOD 3 engine; SKA-010)
+# Contract: docs/task-contract.md step 4b (REVIEW). Before this file a PR had
+# exactly two futures: it merged, or it sat. `changes_requested` had no defined
+# behaviour, rework had no path, and a multi-round conversation had no rules.
+#
+# WHAT IT OWNS — four event paths, one job each, so a failure in one cannot
+# take the others down:
+#
+#   rework    pull_request_review (changes_requested) on an AGENT PR →
+#             assemble a rework brief carrying the review verbatim, run the
+#             coder on the SAME branch with APPEND-ONLY commits, re-request the
+#             same reviewer. Hard cap: max_rework_rounds; the request-changes
+#             past the cap escalates to a human and the loop STOPS.
+#   anchors   pull_request (synchronize) → if the PR has been reviewed and the
+#             push was NOT append-only (force-push), every thread anchor is
+#             broken. Stop the automation loop for that PR, loudly. Do not
+#             proceed on anchors that no longer point at anything.
+#   nudge     schedule → a reviewer silent past nudge_after_hours gets ONE
+#             comment, then the stale marker, then nothing. An automation that
+#             pings on a timer is spam with a cron.
+#   override  pull_request (closed, merged) → if a change-request was open when
+#             the operator merged, RECORD it in one comment and stop. The
+#             operator is the final authority; the engine does not re-litigate
+#             and does not reopen (the SKA-006/008 principle, applied to reviews).
+#
+# ROLES (docs/task-contract.md step 4b): Coder = the author agent. Reviewer = an
+# INDEPENDENT identity, never the author — asserted in code below, because
+# GitHub silently refuses self-review rather than failing in a way you notice.
+# Judge = CI, mechanical. Merger = automerge under the full precondition set.
+# Operator = final authority, always.
+#
+# CI-RED IS NOT A REVIEW EVENT. Nothing here fires on a failed check: the coder
+# fixes and re-pushes, and no rework round is consumed. Rounds are counted from
+# `changes_requested` reviews and nothing else — a flaky test must never spend
+# a repo's rework budget.
+#
+# WHY THE COMMENT-TRIGGER PATH IS NOT USED. The obvious design is "post an
+# @claude comment on the PR and let on-demand.yml pick it up". It does not
+# work: events generated with the built-in GITHUB_TOKEN do not trigger
+# workflows (docs/github-constraints.md #7), so the rework would silently never
+# start. The engine runs the coder itself, mechanically, in this file. Same
+# lesson as v2.0.1: an instruction is not a mechanism.
+#
+# How a repo calls it (triggers + permissions live in the CALLER):
+#
+#   name: Review loop
+#   on:
+#     pull_request_review:
+#       types: [submitted]
+#     pull_request:
+#       types: [synchronize, closed]
+#     schedule:
+#       - cron: "17 */6 * * *"     # off-peak minute; drives the nudge job only
+#   permissions:
+#     contents: write        # push the rework commits
+#     pull-requests: write   # comments, labels, re-request review
+#     issues: write          # labels on the linked issue
+#     id-token: write        # claude-code-action OIDC
+#     actions: read
+#     checks: read
+#   jobs:
+#     review-loop:
+#       uses: sakal-dev/automation/.github/workflows/review-loop.yml@v2
+#       secrets: inherit
+# =============================================================================
+name: review-loop
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Model for rework runs
+        type: string
+        default: claude-opus-4-8
+      max_rework_rounds:
+        description: "Hard cap on rework rounds per PR. The request-changes AFTER this many rounds escalates to a human instead of starting another round — the defence against a coder/reviewer pair ping-ponging on your money."
+        type: number
+        default: 2
+      nudge_after_hours:
+        description: "Hours of reviewer silence after a re-review request before ONE nudge comment is posted (never more than one)"
+        type: number
+        default: 12
+      stale_after_hours:
+        description: "Hours of reviewer silence before the stale marker is applied and the engine stops waiting"
+        type: number
+        default: 36
+      agent_authors:
+        description: "Comma-separated logins whose PRs this loop reworks. A human's PR is never reworked by the engine — a human wrote it, a human answers the review."
+        type: string
+        default: "claude[bot],claude-bot,github-actions[bot]"
+      ci_check_name:
+        description: The check-run name that must be green before merging
+        type: string
+        default: analyze-and-test
+      guardrail_paths:
+        description: "Comma-separated globs that NEVER auto-merge"
+        type: string
+        default: "CLAUDE.md,docs/RULES.md,.github/**"
+      docs_only_paths:
+        description: "Comma-separated globs the repo's CI path-ignores"
+        type: string
+        default: "docs/**,**/*.md"
+      extra_denylist_paths:
+        description: "Repo-specific additions to the hard path denylist (the base list is structural and cannot be removed)"
+        type: string
+        default: ""
+      extra_instructions:
+        description: "Repo-specific instructions appended to the rework prompt. PRECEDENCE: nothing here may loosen the guardrails, the gate, or the append-only rule."
+        type: string
+        default: ""
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
+      source:
+        description: "Task source: github | sakalmaster. EXECUTE never branches on this (invariant 6); only the reporting differs."
+        type: string
+        default: "github"
+    # Secrets via `secrets: inherit`:
+    #   CLAUDE_CODE_OAUTH_TOKEN — the Claude Code subscription token
+
+jobs:
+  # ===========================================================================
+  # REWORK — a reviewer asked for changes; the coder gets one more round.
+  # ===========================================================================
+  rework:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested'
+    runs-on: ${{ inputs.runner }}
+    # Per-PR, never cancel: two reviewers requesting changes seconds apart must
+    # queue behind each other, not race into two rework runs on one branch.
+    concurrency:
+      group: review-loop-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+      checks: read
+    steps:
+      # --- Every reason to stop, checked before a single cent is spent -------
+      - name: Admissibility
+        id: adm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          AGENTS: ${{ inputs.agent_authors }}
+        run: |
+          set -uo pipefail
+          drop() { echo "::notice::review-loop: dropping — $1"; echo "go=false" >> "$GITHUB_OUTPUT"; exit 0; }
+
+          # RACE: a review can land after the merge, and GitHub delivers the
+          # event anyway. Read the CURRENT state, never the payload's snapshot.
+          now=$(gh api "repos/$REPO/pulls/$PR" --jq '{state:.state,merged:.merged}' 2>/dev/null || echo "")
+          [ -z "$now" ] && drop "cannot read PR #$PR"
+          state=$(jq -r .state <<<"$now"); merged=$(jq -r .merged <<<"$now")
+          [ "$state" != "open" ] && drop "PR #$PR is $state (merged=$merged) — a review on a closed PR creates no rework item"
+
+          # BOT IDENTITY EDGE. GitHub does not let an author review their own
+          # PR; if the reviewer identity is ever mis-wired to the author, the
+          # review path degrades to silence rather than an error anyone
+          # notices. Assert it here instead of trusting configuration.
+          if [ "$REVIEWER" = "$AUTHOR" ]; then
+            echo "::error::review-loop: reviewer ($REVIEWER) IS the PR author. The reviewer must be an INDEPENDENT identity — a self-review is not a review, and GitHub blocks approve/request-changes on your own PR. Fix the reviewer identity (SKA-011)."
+            drop "self-review"
+          fi
+
+          # A human's PR is not the engine's to rework.
+          case ",$AGENTS," in
+            *",$AUTHOR,"*) : ;;
+            *) drop "PR #$PR was authored by $AUTHOR, who is not in agent_authors ($AGENTS) — a human's PR is answered by a human" ;;
+          esac
+
+          # A fork head cannot be pushed to with this token.
+          [ "$HEAD_REPO" != "$REPO" ] && drop "PR #$PR head lives in $HEAD_REPO (fork) — this engine cannot push rework commits there"
+
+          labels=$(gh api "repos/$REPO/issues/$PR" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+          case ",$labels," in
+            *",review:broken-anchors,"*) drop "PR #$PR carries review:broken-anchors — a force-push destroyed the thread anchors; a human clears this, not the engine" ;;
+            *",review:escalated,"*)      drop "PR #$PR carries review:escalated — the cap already fired; this PR belongs to a human" ;;
+          esac
+
+          echo "go=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$HEAD_REF" >> "$GITHUB_OUTPUT"
+          echo "::notice::review-loop: rework admissible for #$PR (author=$AUTHOR reviewer=$REVIEWER branch=$HEAD_REF)"
+
+      # Round accounting comes from the shared evaluator so the cap and the
+      # merge gate can never disagree about how many rounds have happened.
+      - name: Review state (round accounting)
+        id: state
+        if: ${{ steps.adm.outputs.go == 'true' }}
+        uses: sakal-dev/automation/actions/review-state@v2
+        with:
+          prs: ${{ github.event.pull_request.number }}
+          token: ${{ github.token }}
+          ci_check_name: ${{ inputs.ci_check_name }}
+          guardrail_paths: ${{ inputs.guardrail_paths }}
+          docs_only_paths: ${{ inputs.docs_only_paths }}
+          max_rework_rounds: ${{ inputs.max_rework_rounds }}
+
+      # --- THE CAP. This step is what stops a coder and a reviewer billing you
+      # forever. The decision is computed in review-state (one number, two
+      # consumers); this step only acts on it. --------------------------------
+      - name: Enforce the rework cap
+        id: cap
+        if: ${{ steps.adm.outputs.go == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          VERDICTS: ${{ steps.state.outputs.verdicts }}
+          CAP: ${{ inputs.max_rework_rounds }}
+          REVIEWER: ${{ github.event.review.user.login }}
+        run: |
+          set -uo pipefail
+          # Comment bodies are built with printf, never as a multi-line shell
+          # string: a line at column 0 inside a `run: |` block ends the YAML
+          # block scalar and the workflow stops parsing.
+          body() { printf '%s\n' "$@"; }
+          rounds=$(jq -r '.[0].facts.rounds // 0' <<<"$VERDICTS")
+          decision=$(jq -r '.[0].facts.rework_decision // "rework"' <<<"$VERDICTS")
+          echo "::notice::review-loop: #$PR is at change-request round $rounds (cap $CAP) → $decision"
+          echo "rounds=$rounds" >> "$GITHUB_OUTPUT"
+          if [ "$decision" = "rework" ]; then echo "go=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+
+          echo "go=false" >> "$GITHUB_OUTPUT"
+          # Escalate with a label in the review:* namespace, deliberately NOT
+          # claude-blocked/claude-ready — those are the operator's steering
+          # wheel and stay human-only (v2.4.0).
+          gh label create "review:escalated" -R "$REPO" --color B60205 \
+            --description "Rework cap reached — a human owns this PR now" 2>/dev/null || true
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=review:escalated' >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/review:rework" >/dev/null 2>&1 || true
+
+          marker="<!-- sakal-review-escalated -->"
+          if gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            echo "::notice::escalation already recorded — not commenting twice"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+              "**Review loop stopped — escalated to a human.**" \
+              "" \
+              "This PR has now received $rounds change-requests; the cap is $CAP rework rounds. The automation will not start another round: past this point a coder and a reviewer are negotiating with each other on your money, and the cheapest correct move is a human reading the thread." \
+              "" \
+              "Latest request-changes by @$REVIEWER. Nothing was reverted, and none of your queue labels were touched — the branch is exactly where the last round left it." \
+              "" \
+              "What unsticks it: a human resolves the disagreement, then removes \`review:escalated\`." \
+              "" \
+              "$marker")" >/dev/null 2>&1 && echo "::warning::review-loop: CAP FIRED on #$PR at round $rounds — escalated to a human." \
+              || echo "::error::could not post the escalation comment on #$PR"
+          fi
+
+      # --- The brief: the review verbatim, plus every thread still open from
+      # earlier rounds. The brief is the entire task interface (contract step
+      # 2) — a coder that needs something not in it means the brief is
+      # incomplete, and the brief is what gets fixed. ------------------------
+      - name: Assemble the rework brief
+        id: brief
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        uses: sakal-dev/automation/actions/review-brief@v2
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          branch: ${{ steps.adm.outputs.branch }}
+          reviewer: ${{ github.event.review.user.login }}
+          review_body: ${{ github.event.review.body }}
+          rounds: ${{ steps.cap.outputs.rounds }}
+          max_rework_rounds: ${{ inputs.max_rework_rounds }}
+          extra_denylist_paths: ${{ inputs.extra_denylist_paths }}
+          token: ${{ github.token }}
+
+      # Post the brief on the PR. This is the audit trail: what the coder was
+      # told, in the thread, at the time — not only in a runner log that expires.
+      - name: Publish the brief on the PR
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ROUNDS: ${{ steps.cap.outputs.rounds }}
+          REVIEW_ID: ${{ github.event.review.id }}
+          BRIEF: ${{ steps.brief.outputs.text }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+            "**Rework round $ROUNDS started** — this is exactly what the coder was given." \
+            "" \
+            "<details><summary>Rework brief (verbatim)</summary>" \
+            "" \
+            "$BRIEF" \
+            "" \
+            "</details>" \
+            "" \
+            "<!-- sakal-review-brief: round=$ROUNDS review=$REVIEW_ID -->")" >/dev/null 2>&1 \
+            && echo "::notice::rework brief posted to #$PR" || echo "::warning::could not post the rework brief comment"
+
+      - name: Checkout the PR branch
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.adm.outputs.branch }}
+          fetch-depth: 0
+
+      # The head SHA BEFORE the coder touches anything. Everything the
+      # append-only check knows, it knows from this line.
+      - name: Record the pre-rework head
+        id: before
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "::notice::pre-rework head: $sha"
+
+      - name: Set up project (./tool/setup.sh)
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        uses: sakal-dev/automation/actions/setup-project@v2
+
+      - name: Run the coder on the review
+        id: coder
+        if: ${{ steps.adm.outputs.go == 'true' && steps.cap.outputs.go == 'true' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--max-turns 120 --model ${{ inputs.model }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
+          prompt: |
+            You are the CODER answering a code review on PR
+            #${{ github.event.pull_request.number }} of ${{ github.repository }}. The branch
+            `${{ steps.adm.outputs.branch }}` is already checked out, `gh` is authenticated, and
+            the toolchain is prepared (./tool/setup.sh has run). Follow the repo's own rules
+            (CLAUDE.md and the rules doc it imports); the brief below is the task.
+
+            ${{ steps.brief.outputs.text }}
+
+            When you are done: commit and push to `${{ steps.adm.outputs.branch }}` with a plain
+            `git push` — NEVER `--force`. The engine re-runs `./tool/verify.sh` itself and
+            re-requests the review; you do neither.
+            ${{ inputs.extra_instructions }}
+
+      # Read the branch head AFTER the coder, for the append-only judgement.
+      - name: Read the post-rework head
+        id: after
+        if: ${{ always() && steps.before.outputs.sha != '' }}
+        env:
+          BRANCH: ${{ steps.adm.outputs.branch }}
+        run: |
+          set -uo pipefail
+          git fetch origin "$BRANCH" --quiet 2>/dev/null || true
+          sha=$(git rev-parse "origin/$BRANCH" 2>/dev/null || echo "")
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "::notice::post-rework head: ${sha:-<unreadable>}"
+
+      # --- APPEND-ONLY ENFORCEMENT (mechanical). The brief asks; this proves.
+      - name: Append-only check
+        id: anchors
+        if: ${{ always() && steps.before.outputs.sha != '' && steps.after.outputs.sha != '' }}
+        uses: sakal-dev/automation/actions/review-anchors@v2
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          before: ${{ steps.before.outputs.sha }}
+          after: ${{ steps.after.outputs.sha }}
+          force_check: "true"
+          token: ${{ github.token }}
+
+      - name: Stop the loop on a rewritten history
+        if: ${{ always() && steps.anchors.outputs.verdict == 'rewritten' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ steps.before.outputs.sha }}
+          AFTER: ${{ steps.after.outputs.sha }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+          echo "::error::APPEND-ONLY VIOLATED on #$PR — the rework rewrote the branch history. Every review thread anchor is broken."
+          gh label create "review:broken-anchors" -R "$REPO" --color D93F0B \
+            --description "History was rewritten after a review — thread anchors are broken; automation stopped" 2>/dev/null || true
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=review:broken-anchors' >/dev/null 2>&1 || true
+          marker="<!-- sakal-review-anchors: pr=$PR -->"
+          if ! gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+              "**Automation stopped on this PR — review anchors are broken.**" \
+              "" \
+              "The branch history was rewritten during a rework round (\`${BEFORE:0:12}\` is no longer an ancestor of \`${AFTER:0:12}\`). Review comments anchor to commits; after a rewrite they point at code that is not in this branch, so every thread here is now unreliable." \
+              "" \
+              "While \`review:broken-anchors\` is present the engine will not rework this PR and will not auto-merge it. Nothing was reverted and no queue labels were touched. A human decides: re-review from scratch, or open a fresh PR." \
+              "" \
+              "$marker")" >/dev/null 2>&1 || true
+          fi
+          exit 1
+
+      # The gate runs in the GATE's environment, not the coder's (invariant 1).
+      # A local pass carries no authority — same rule as every other path.
+      - name: Re-run the gate (./tool/verify.sh)
+        id: gate
+        if: ${{ steps.cap.outputs.go == 'true' && steps.anchors.outputs.verdict == 'append-only' }}
+        env:
+          BRANCH: ${{ steps.adm.outputs.branch }}
+        run: |
+          set -uo pipefail
+          git fetch origin "$BRANCH" --quiet 2>/dev/null || true
+          git checkout -q "origin/$BRANCH" 2>/dev/null || true
+          if [ ! -x ./tool/verify.sh ]; then
+            echo "::warning::no ./tool/verify.sh — this rework round was NOT gated"
+            echo "pass=unknown" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ./tool/verify.sh; then echo "pass=true" >> "$GITHUB_OUTPUT"; else echo "pass=false" >> "$GITHUB_OUTPUT"; fi
+
+      # Re-request the SAME reviewer. Not a new one: the reviewer who raised the
+      # points is the one who can say whether they were met.
+      - name: Re-request review and record the round
+        if: ${{ always() && steps.cap.outputs.go == 'true' && steps.anchors.outputs.verdict == 'append-only' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REVIEWER: ${{ github.event.review.user.login }}
+          ROUNDS: ${{ steps.cap.outputs.rounds }}
+          CAP: ${{ inputs.max_rework_rounds }}
+          GATE: ${{ steps.gate.outputs.pass }}
+          CODER: ${{ steps.coder.outcome }}
+          EXEC_FILE: ${{ steps.coder.outputs.execution_file }}
+          SRC: ${{ inputs.source }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+
+          # MEASURED cost only. No file, no number → report no cost at all
+          # (v2.2.0's rule: never invent one).
+          COST=""
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            COST=$(jq -r '[.. | objects | .total_cost_usd? // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)
+          fi
+
+          gh label create "review:rework" -R "$REPO" --color FBCA04 \
+            --description "A rework round is in flight for this PR" 2>/dev/null || true
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=review:rework' >/dev/null 2>&1 || true
+          # A new round answers the previous silence; the stale marker is spent.
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/review:stale" >/dev/null 2>&1 || true
+
+          # The durable round marker in the PR body. GitHub's review history is
+          # the primary counter; this is the floor that survives a dismissal
+          # (see actions/review-state/review-state.sh, rounds_of).
+          body=$(gh api "repos/$REPO/pulls/$PR" --jq .body 2>/dev/null || echo "")
+          stripped=$(printf '%s' "$body" | sed 's/<!-- sakal-review:[^>]*-->//g')
+          gh api -X PATCH "repos/$REPO/pulls/$PR" \
+            -f body="$(body "$stripped" "<!-- sakal-review: rounds=$ROUNDS -->")" >/dev/null 2>&1 \
+            && echo "::notice::round marker written (rounds=$ROUNDS)" \
+            || echo "::warning::could not update the PR body marker — the review history still carries the count"
+
+          # A bot/app reviewer cannot be re-requested through this endpoint;
+          # name them in a comment rather than pretending it worked.
+          if gh api -X POST "repos/$REPO/pulls/$PR/requested_reviewers" \
+               -f "reviewers[]=$REVIEWER" >/dev/null 2>&1; then
+            requested="Re-review requested from @$REVIEWER."
+          else
+            requested="The API would not accept a re-review request for @$REVIEWER (bot and app reviewers cannot be requested this way), so this comment is the request: @$REVIEWER, this is ready for another look."
+          fi
+
+          # Default to "did not run", never to "passed". The gate step is
+          # skipped when the coder step failed, and an empty output must not
+          # read as a green gate — that is how a comment ends up asserting
+          # something nobody checked.
+          case "${GATE:-}" in
+            true)    gate_line="The gate (\`./tool/verify.sh\`) **passed** in the engine's own environment." ;;
+            false)   gate_line="The gate (\`./tool/verify.sh\`) **FAILED** in the engine's own environment — this round is not mergeable as it stands." ;;
+            unknown) gate_line="This repo has no \`./tool/verify.sh\`, so the round was not gated." ;;
+            *)       gate_line="The gate did **not run** for this round (the coder step ended as \`$CODER\`), so nothing here is verified." ;;
+          esac
+
+          cost_line=""
+          [ -n "$COST" ] && cost_line="Measured run cost: \$$COST. "
+
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+            "**Rework round $ROUNDS finished** (coder step: $CODER)." \
+            "" \
+            "Commits were appended — history was not rewritten, so every review thread still anchors to real code. $gate_line" \
+            "" \
+            "$requested" \
+            "" \
+            "${cost_line}Queue mode: \`$SRC\`. Rounds used: $ROUNDS of $CAP." \
+            "" \
+            "<!-- sakal-review-round: round=$ROUNDS -->")" >/dev/null 2>&1 || true
+
+          if [ "$SRC" = "sakalmaster" ]; then
+            echo "::warning::integrated mode: this rework run is NOT recorded in agent_runs. SakalMaster has no RPC that opens a run against a NAMED task (claim_next_task claims the NEXT one), so there is nothing honest to report against. Filed as a SakalMaster change; deliberately not worked around here."
+          fi
+
+  # ===========================================================================
+  # ANCHORS — a push landed on a reviewed PR. Was it append-only?
+  # ===========================================================================
+  anchors:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'synchronize'
+    runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: review-anchors-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Judge the push lineage
+        id: anchors
+        uses: sakal-dev/automation/actions/review-anchors@v2
+        with:
+          pr: ${{ github.event.pull_request.number }}
+          before: ${{ github.event.before }}
+          after: ${{ github.event.after }}
+          token: ${{ github.token }}
+
+      - name: Stop the loop on a force-push
+        if: ${{ steps.anchors.outputs.verdict == 'rewritten' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+          gh label create "review:broken-anchors" -R "$REPO" --color D93F0B \
+            --description "History was rewritten after a review — thread anchors are broken; automation stopped" 2>/dev/null || true
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=review:broken-anchors' >/dev/null 2>&1 || true
+
+          marker="<!-- sakal-review-anchors: pr=$PR -->"
+          if gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            echo "::notice::already recorded on #$PR — not commenting twice"; exit 0
+          fi
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+            "**Automation stopped on this PR — review anchors are broken.**" \
+            "" \
+            "This branch was force-pushed after it had been reviewed (\`${BEFORE:0:12}\` → \`${AFTER:0:12}\`). Review comments anchor to commits, so the existing threads now point at code that is not in this branch." \
+            "" \
+            "While \`review:broken-anchors\` is present the engine will not rework this PR and will not auto-merge it. Nothing was reverted and no queue labels were touched. A human decides: re-review from scratch, or open a fresh PR." \
+            "" \
+            "$marker")" >/dev/null 2>&1 || true
+          echo "::warning::#$PR marked review:broken-anchors after a force-push"
+
+  # ===========================================================================
+  # NUDGE — the reviewer has gone quiet. One comment. Then a marker. Then
+  # nothing.
+  # ===========================================================================
+  nudge:
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: review-nudge-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Nudge silent reviewers once, then mark stale
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUDGE_H: ${{ inputs.nudge_after_hours }}
+          STALE_H: ${{ inputs.stale_after_hours }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+          now=$(date -u +%s)
+
+          prs=$(gh api "repos/$REPO/pulls?state=open&per_page=100" --jq '.[].number' 2>/dev/null || true)
+          [ -z "$prs" ] && { echo "::notice::no open PRs"; exit 0; }
+
+          for pr in $prs; do
+            labels=$(gh api "repos/$REPO/issues/$pr" --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+            case ",$labels," in
+              *",review:rework,"*) : ;;
+              *) continue ;;
+            esac
+            case ",$labels," in
+              *",review:escalated,"*|*",review:broken-anchors,"*)
+                echo "#$pr is escalated/broken — not nudging"; continue ;;
+            esac
+
+            # When was a review last REQUESTED, and has anything happened since?
+            req=$(gh api --paginate "repos/$REPO/issues/$pr/timeline?per_page=100" \
+              -H "Accept: application/vnd.github+json" \
+              --jq '[.[] | select(.event=="review_requested") | .created_at] | last // ""' 2>/dev/null || echo "")
+            [ -z "$req" ] && { echo "#$pr: no review_requested event — nothing to wait on"; continue; }
+            last_review=$(gh api "repos/$REPO/pulls/$pr/reviews" --jq '[.[].submitted_at] | last // ""' 2>/dev/null || echo "")
+            if [ -n "$last_review" ] && [[ "$last_review" > "$req" ]]; then
+              echo "#$pr: a review arrived after the request — not waiting"; continue
+            fi
+
+            req_s=$(date -u -d "$req" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$req" +%s 2>/dev/null || echo 0)
+            [ "$req_s" = "0" ] && { echo "#$pr: cannot parse timestamp $req"; continue; }
+            hours=$(( (now - req_s) / 3600 ))
+            echo "#$pr: waiting ${hours}h since $req"
+
+            if [ "$hours" -ge "$STALE_H" ]; then
+              case ",$labels," in
+                *",review:stale,"*) echo "  already stale — nothing more to say"; continue ;;
+              esac
+              gh label create "review:stale" -R "$REPO" --color BFBFBF \
+                --description "Re-review requested and unanswered past the stale window" 2>/dev/null || true
+              gh api -X POST "repos/$REPO/issues/$pr/labels" -f 'labels[]=review:stale' >/dev/null 2>&1 || true
+              gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$(body \
+                "**Marked \`review:stale\`** — a re-review was requested ${hours}h ago (window: ${STALE_H}h) and no review has been submitted since." \
+                "" \
+                "The engine stops here. It nudged once and will not ask again; a timer that keeps pinging is spam with a cron. This PR needs a human to review it, reassign it, or close it." \
+                "" \
+                "<!-- sakal-review-stale: pr=$pr -->")" >/dev/null 2>&1 || true
+              echo "::warning::#$pr marked review:stale after ${hours}h of reviewer silence"
+              continue
+            fi
+
+            if [ "$hours" -ge "$NUDGE_H" ]; then
+              marker="<!-- sakal-review-nudge: pr=$pr -->"
+              if gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+                echo "  already nudged — ONE nudge is the whole policy"; continue
+              fi
+              gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$(body \
+                "A re-review was requested ${hours}h ago and this PR is still waiting." \
+                "" \
+                "This is the only nudge that will be posted for it. If nothing happens by ${STALE_H}h it will be marked \`review:stale\` and left for a human." \
+                "" \
+                "$marker")" >/dev/null 2>&1 && echo "::notice::nudged #$pr (${hours}h)" || true
+            fi
+          done
+
+  # ===========================================================================
+  # OVERRIDE — the operator merged. Whatever the bots thought, that is the
+  # answer. Record it; never re-litigate it.
+  # ===========================================================================
+  override:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Record a merge over an open change-request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+        run: |
+          set -uo pipefail
+          body() { printf '%s\n' "$@"; }
+          OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
+          J=$(gh api graphql -f query='
+            query($owner:String!,$name:String!,$number:Int!){
+              repository(owner:$owner,name:$name){ pullRequest(number:$number){
+                latestReviews(first:50){ nodes{ state author{login} } }
+                reviewThreads(first:100){ nodes{ isResolved } } } } }' \
+            -F owner="$OWNER" -F name="$NAME" -F number="$PR" 2>/dev/null || echo '{}')
+          crs=$(jq -r '[.data.repository.pullRequest.latestReviews.nodes[]? | select(.state=="CHANGES_REQUESTED") | .author.login] | join(", ")' <<<"$J")
+          open_threads=$(jq -r '[.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved==false)] | length' <<<"$J")
+
+          if [ -z "$crs" ] && [ "${open_threads:-0}" -eq 0 ]; then
+            echo "::notice::#$PR merged cleanly — no open change-request, no open threads"; exit 0
+          fi
+
+          marker="<!-- sakal-review-override: pr=$PR -->"
+          if gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+            echo "::notice::override already recorded on #$PR"; exit 0
+          fi
+          detail=""
+          [ -n "$crs" ] && detail="open change-request(s) from: $crs"
+          [ "${open_threads:-0}" -gt 0 ] && detail="${detail:+$detail; }${open_threads} unresolved thread(s)"
+
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$(body \
+            "**Merged by @$MERGED_BY over $detail — recorded.**" \
+            "" \
+            "This is allowed and it is final. The operator is the authority on this repository; a bot's review is advice, not a veto. Nothing will be reopened, no rework will be queued, and no bot will raise these points again on this PR." \
+            "" \
+            "$marker")" >/dev/null 2>&1 \
+            && echo "::warning::#$PR was merged by @$MERGED_BY over $detail — recorded, not re-litigated" \
+            || echo "::warning::could not record the override comment on #$PR"

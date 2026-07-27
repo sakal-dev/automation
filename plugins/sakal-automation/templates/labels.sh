@@ -13,8 +13,16 @@ l claude-working  "FBCA04" "An agent run has claimed this; removed mechanically 
 l claude-blocked  "D93F0B" "Agent stopped — needs a human answer; remove to re-queue"
 l claude-done     "0E8A16" "PR open and ready for review"
 # ── Merge & model control (machine-read) ─────────────────────────────────────
-l auto-merge      "5319E7" "Opt-in: merge this PR automatically when CI is green"
+l auto-merge      "5319E7" "Opt-in: merge automatically once EVERY precondition holds"
 l review          "C2E0C6" "Request a Claude code review on the PR"
+# ── Review loop (machine-read; own namespace, never mixed with claude-*) ──────
+# claude-ready / claude-blocked stay the MAINTAINER's steering wheel; these are
+# the engine's own state and it is the only thing that sets them.
+l needs-human-merge      "0E0E0E" "Hard stop: this PR/area is merged by a human only"
+l "review:rework"        "FBCA04" "A rework round is in flight for this PR"
+l "review:escalated"     "B60205" "Rework cap reached — a human owns this PR now"
+l "review:stale"         "BFBFBF" "Re-review requested and unanswered past the stale window"
+l "review:broken-anchors" "D93F0B" "History rewritten after a review — thread anchors broken; automation stopped"
 l opus            "BFD4F2" "Model override for on-demand runs"
 l sonnet          "BFD4F2" "Model override for on-demand runs"
 l fable           "BFD4F2" "Model override for on-demand runs"

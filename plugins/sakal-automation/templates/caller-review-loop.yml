@@ -1,0 +1,44 @@
+# Caller for the shared automation engine's PR REVIEW LOOP
+# (sakal-dev/automation). The engine owns the behaviour: rework rounds on
+# `changes_requested`, the hard cap and its escalation, append-only enforcement
+# on reviewed branches, one nudge for a silent reviewer, and recording an
+# operator merge over an open change-request. This file owns the triggers and
+# the permissions. No placeholders.
+#
+# The schedule drives ONLY the nudge sweep — it costs one cheap API listing when
+# no PR is waiting. Off-peak minute, never :00/:30 (cron is UTC and best-effort).
+#
+# BEFORE YOU TURN THIS ON: the reviewer must be a GitHub identity DIFFERENT from
+# whatever authors the agent PRs. GitHub refuses approve/request-changes on your
+# own PR (422), so a repo where the coder is also the reviewer has a review loop
+# that silently never starts. Humans reviewing counts and needs no setup.
+name: Review loop
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [synchronize, closed]
+  schedule:
+    - cron: "17 */6 * * *"
+
+# A reusable workflow cannot raise permissions beyond this grant — a missing
+# line here fails inside the engine as a silent 403.
+permissions:
+  contents: write # push the rework commits to the PR branch
+  pull-requests: write # comments, labels, re-request review
+  issues: write # labels on the PR and its linked issue
+  id-token: write # claude-code-action OIDC
+  actions: read # read CI results on the PR
+  checks: read # read the named check's conclusion
+
+jobs:
+  review-loop:
+    uses: sakal-dev/automation/.github/workflows/review-loop.yml@v2
+    # with:
+    #   max_rework_rounds: 2      # the request-changes PAST this escalates
+    #   nudge_after_hours: 12     # one nudge, then silence
+    #   stale_after_hours: 36
+    #   agent_authors: "claude[bot]"   # whose PRs this loop reworks
+    #   source: sakalmaster            # integrated mode
+    secrets: inherit

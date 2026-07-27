@@ -59,12 +59,23 @@ no production code** — findings go where the issue says · epics, questions,
 and security issues are never agent-queued by default · one issue = one PR =
 one run; more than ~5 ACs or more than one module → split under an epic.
 
-## 7. Merge behavior — label-gated and mechanical
+## 7. Merge behavior — precondition-gated and mechanical
 
 Agents **never merge.** Verify (§3), open the PR (`Closes #<n>`), stop. The
-auto-merge workflow merges only when the issue carries the `auto-merge` label
-AND the CI check is green; otherwise the PR waits for human review. Guardrail
-files (`CLAUDE.md`, `docs/RULES.md`, `.github/**`) never auto-merge.
+auto-merge workflow merges only when **every** precondition holds:
+
+`auto-merge` label (on the issue or the PR) · not a draft · CI green · **at
+least one current approval** · **zero open change-requests** · **zero
+unresolved review threads** · no `needs-human-merge` / `priority:urgent` /
+`review:escalated` / `review:broken-anchors` label · no guardrail file touched
+(`CLAUDE.md`, `docs/RULES.md`, `.github/**`).
+
+Any one of those failing means the PR waits. Docs-only PRs — where every changed
+file is one CI ignores — skip the CI check and the approval, deliberately; they
+do **not** skip an open change-request or an unresolved thread.
+
+An **approval of a commit that is no longer the head is void.** Pushing new
+commits voids the approval that came before them.
 
 ## 8. Avoid overlap — the `claude-working` marker
 
@@ -100,7 +111,38 @@ passive: settling a question early only means you stop re-asking it — nothing
 gets queued, nothing gets worked, no money is spent. The human's next label
 click decides everything.
 
-## 10. End-of-session duty — the changelog
+## 10. Answering a code review — the rework loop
+
+Not every PR is right the first time. When a reviewer requests changes, you get
+another round on the **same branch**; the rules of that round are binding.
+
+**You may never review your own work.** The reviewer is a different identity —
+another agent or a human. GitHub blocks reviewing your own PR anyway; do not
+try to work around it.
+
+**Commits are APPEND-ONLY once a PR has been reviewed.** No `git push --force`,
+no `git rebase`, no `git commit --amend`, no `git reset` on that branch. Review
+comments anchor to commits: rewrite the history and every thread the reviewer is
+mid-conversation in now points at code that is not there. The engine checks
+this after you and stops the automation for that PR if you broke it. (Before the
+first review, rebasing your own branch is fine.)
+
+**Reply to every thread you addressed**, naming the commit that fixes it. Do
+**not** resolve threads — only the reviewer or a human resolves. If you think a
+point is wrong, say so in the thread with your reasoning and leave it open.
+Disagreeing is allowed; silently ignoring is not.
+
+**Two rework rounds, then a human.** The third request-changes stops the loop
+and escalates (`review:escalated`). Do not try to keep going.
+
+**CI going red is not a review round.** Fix it and push; nothing is consumed.
+
+The review labels — `review:rework`, `review:escalated`, `review:stale`,
+`review:broken-anchors`, `needs-human-merge` — are the engine's. `claude-ready`
+and `claude-blocked` remain the maintainer's (§9); the review loop never touches
+them.
+
+## 11. End-of-session duty — the changelog
 
 Before finishing, append one entry to `docs/CHANGELOG-RECENT.md` (format
 inside the file) and rotate the oldest entry beyond 10 into

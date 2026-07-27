@@ -30,6 +30,8 @@ the judge).
 3 EXECUTE  who does the work              channels 1–7, 1+2 = Cloud dispatch (NOTES.md §3)
 4 GATE     how it is judged + reported    ./tool/verify.sh + PR → labels | agent_runs
            gate before PR · merge opt-in · agents never verify their own claims
+4b REVIEW  the back-and-forth before merge  request-changes → rework (cap 2) → escalate
+           reviewer ≠ author · reviewed branches are append-only · operator overrides, recorded
 ```
 
 The full spec is [`docs/task-contract.md`](docs/task-contract.md) — everything
@@ -40,9 +42,11 @@ that document's checklist.
 
 ```
 .github/workflows/    reusable workflows (workflow_call) — method 3 engines:
-                      sweep, on-demand, automerge, claude-done, verify
+                      sweep, on-demand, automerge, claude-done, review-loop,
+                      verify
 actions/              composite actions: setup-project, claim-github,
-                      claim-sakal, report-sakal
+                      claim-sakal, report-sakal, authority-gate,
+                      review-state, review-brief, review-anchors
 workers/              VPS executors — headless-loop (m4), sdk-worker (m5),
                       docker sandbox
 .claude-plugin/       this repo is also a plugin marketplace

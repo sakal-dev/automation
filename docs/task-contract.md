@@ -245,6 +245,143 @@ dashboard derives its view from those records at read time.
 
 ---
 
+## Step 4b — REVIEW
+
+*What happens between "a PR exists" and "a PR merges". Not every PR is right
+the first time; this step is the whole back-and-forth, and it has rules.*
+
+**Consumes:** an open PR from step 3, and the reviews humans and agents leave
+on it.
+
+**Produces:** either a PR that meets every merge precondition, or a PR handed
+to a human with the reason written down. Never an open-ended loop.
+
+### The roles
+
+| Role | Who | Rule |
+|---|---|---|
+| **Coder** | the agent that authored the PR | answers reviews; never reviews its own work |
+| **Reviewer** | an **independent identity** — a different agent, or a human | never the author, ever |
+| **Judge** | CI | mechanical; a check is green or it is not |
+| **Merger** | the automerge gate | merges only on the full precondition set below |
+| **Operator** | the human with write access | final authority, always |
+
+**The reviewer is a different GitHub identity from the author, and this is
+asserted in code, not assumed from configuration.** GitHub refuses `APPROVE`
+and `REQUEST_CHANGES` on your own pull request (verified: HTTP 422, *"Can not
+request changes on your own pull request"*), so a mis-wired reviewer identity
+does not fail loudly — the review path simply goes quiet, which is the worst
+way for a safety mechanism to break. Humans may review at any time, in any
+role, without configuration.
+
+### Merge preconditions — all of them, every time
+
+A PR merges automatically only when **all** of these hold:
+
+1. the PR is open and not a draft;
+2. `auto-merge` is on the PR or a linked issue (merge stays opt-in, invariant 2);
+3. no guardrail path is touched;
+4. no hard-stop label: `needs-human-merge`, `review:escalated`,
+   `review:broken-anchors`, `priority:urgent`;
+5. the named CI check is green;
+6. at least **one current approval** — an approval given for a commit that is
+   no longer the head is void;
+7. **zero open change-requests** (latest review per reviewer);
+8. **zero unresolved review threads**;
+9. GitHub's own `reviewDecision` / `mergeStateStatus` does not disagree;
+10. the full changed-file list is readable — a list too large to see is a list
+    whose guardrail check cannot be trusted.
+
+**Docs-only PRs keep their reviewless fast path**, deliberately: a PR whose
+every file the repo's CI path-ignores waives (5) and (6), because CI produces
+no check for it and requiring an approval would deadlock the fast path that
+exists to move documentation quickly. It waives nothing else. An open
+change-request or an unresolved thread stops a docs PR exactly as it stops a
+code PR — a human who said "no" to a docs change said no.
+
+**Approve-with-comments is a comment, not consent.** An approval alongside
+open threads does not satisfy (8). If the reviewer meant "ship it", they
+resolve the threads.
+
+### The rework cycle
+
+```
+changes_requested → rework brief (the review, verbatim) → coder appends commits
+                  → gate re-runs → same reviewer re-requested → …
+```
+
+- The brief carries the review body and **every unresolved thread**, verbatim,
+  including threads from earlier rounds the coder never answered. Summarising a
+  review is the engine deciding which of the reviewer's points matter, and that
+  is not the engine's decision to make.
+- **Commits are APPEND-ONLY.** After the first review, force-push, rebase, and
+  amend are forbidden: review comments anchor to commits, and rewriting history
+  points every thread at code that is no longer in the branch. The engine
+  detects a rewrite (commit lineage, from GitHub's own compare) and **stops the
+  automation loop for that PR loudly** rather than working from anchors that
+  mean nothing.
+- The coder **replies** to every thread it addressed, naming the fixing commit.
+  It never **resolves** a thread — only the reviewer or a human resolves.
+  Disagreeing in the thread is allowed; silently ignoring is not.
+- The engine re-requests the **same** reviewer. The reviewer who raised the
+  points is the one who can say whether they were met.
+- Every rework round is a normal engine run: same gate, same measured cost,
+  same reporting as any other.
+
+### The cap
+
+**Two rework rounds per PR.** The request-changes *after* the cap does not
+start another round: it escalates to a human with a comment and the
+`review:escalated` label, and the loop stops. Past round two a coder and a
+reviewer are negotiating with each other on the operator's money, and a human
+reading the thread is both cheaper and more likely to be right.
+
+The round count is durable, and deliberately has two sources: GitHub's review
+history (the count of `changes_requested` reviews) and a marker in the PR body.
+The engine takes the **higher** of the two. Neither alone survives contact with
+reality — dismissing a review rewrites its state and erases it from history,
+and a PR body can be edited — so lowering the count requires defeating both,
+which is a deliberate act by someone entitled to perform it.
+
+### Disagreement
+
+**Most-restrictive-wins.** A `changes_requested` outlives an approval until its
+own author, or a human, dismisses or resolves it. A human requesting changes
+while an agent approves means the PR does not merge; the reverse is equally
+true. When GitHub's own view disagrees with the engine's count, **GitHub
+wins** — branch protection, CODEOWNERS, and required reviewers are rules the
+engine cannot see.
+
+### Reviewer silence
+
+A re-review requested and unanswered gets **one** nudge comment, then a
+`review:stale` marker, then nothing. Re-requesting on a timer is spam with a
+cron attached.
+
+### CI-red is not a review event
+
+A failed check is not a change-request. The coder fixes and re-pushes; **no
+rework round is consumed**. A flaky test must never spend a repo's rework
+budget.
+
+### The operator's override
+
+An operator may merge over any bot's open change-request, at any time, and that
+is final. The engine records it in exactly one comment and does nothing else:
+it does not reopen, does not queue rework, and no bot raises those points again
+on that PR. This is invariant 8 (a maintainer's answer is authoritative and
+durable) applied one layer up — from questions to reviews.
+
+### Workflow labels
+
+Review-loop state lives in its **own namespace**: `review:rework`,
+`review:escalated`, `review:stale`, `review:broken-anchors`, plus
+`needs-human-merge`. `claude-ready` and `claude-blocked` are the operator's
+steering wheel and stay human-steered (v2.4.0) — the review loop never touches
+them.
+
+---
+
 ## Invariants
 
 These hold across every method, both modes, forever. A change that violates
@@ -290,6 +427,30 @@ one is a regression, not a redesign.
    identity of the actor (app token on GitHub; PAT-attributed writes in
    SakalMaster).
 
+10. **Merge requires the whole precondition set, and any one of them is a hard
+    stop.** Not draft · opted in · no guardrail path · no hard-stop label · CI
+    green · ≥1 current approval · zero open change-requests · zero unresolved
+    threads · GitHub does not disagree · the changed-file list is readable. The
+    docs-only fast path waives only CI and the approval, and nothing else, ever.
+    Where the engine cannot see the truth — an unreadable PR, a file list past
+    the page cap — it holds. A gate that fails open is not a gate.
+
+11. **A reviewed branch is append-only.** After the first review, history is not
+    rewritten: review comments anchor to commits, and a rewrite points every
+    thread at code that is no longer there. The engine detects a rewrite and
+    stops the loop for that PR rather than acting on broken anchors. *(Before
+    the first review there is nothing to break, and a rebase is ordinary
+    hygiene.)*
+
+12. **A review conversation is bounded.** Two rework rounds per PR, counted
+    durably (review history and a PR-body marker, whichever is higher); the
+    request-changes past the cap escalates to a human and the loop stops. An
+    agent pair that can talk forever will.
+
+13. **The reviewer is never the author.** Independence is asserted in code, not
+    configured — GitHub refuses self-review by returning 422, so a mis-wired
+    identity makes the review path go silent instead of failing loudly.
+
 ## Conformance checklist for a new executor
 
 To add an executor (a new method, or a variant of an existing one), you must
@@ -310,3 +471,18 @@ be able to answer yes to all of:
       every exit path.
 - [ ] Its credentials are the org-level secrets; every action it takes is
       attributable to that identity.
+- [ ] When a review requests changes on its PR, it appends commits — it never
+      force-pushes, rebases, or amends a reviewed branch (step 4b).
+- [ ] It replies to review threads and never resolves them.
+- [ ] It cannot review or approve its own PR, and it cannot merge one.
+
+To add a **reviewer** (a review agent, a second provider, a service), you must
+additionally be able to answer yes to all of:
+
+- [ ] It authenticates as a GitHub identity distinct from every coder identity
+      in the repo.
+- [ ] Its verdicts are `APPROVE` / `REQUEST_CHANGES` / `COMMENT` on the PR —
+      it has no path to merge, label, or status that bypasses step 4.
+- [ ] It resolves only threads it owns, and it never edits the branch.
+- [ ] It accepts that the operator can merge over it, and it does not re-raise
+      a point on a PR that was merged over its objection.

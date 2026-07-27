@@ -1,33 +1,49 @@
 # =============================================================================
-# automerge.yml — label-gated merge (METHOD 3 engine; judges every PR)
-# Extracted from sakalpos-garage's automerge.yml; behaviour-identical with the
-# hardening intact. Contract: docs/task-contract.md step 4 (gate) —
-# merge is OPT-IN per task, review is the default (invariant 2).
+# automerge.yml — precondition-gated merge (METHOD 3 engine; judges every PR)
+# Extracted from sakalpos-garage's automerge.yml; hardening intact. Contract:
+# docs/task-contract.md step 4 (gate) + step 4b (review) — merge is OPT-IN per
+# task, review is the default (invariant 2), and since v2.5.0 the FULL
+# precondition set is required, not just "CI is green".
 #
-# Merges a PR when its linked issue (or the PR itself) carries `auto-merge`
-# AND CI is green — nothing else:
-#   • issue has `auto-merge`  → merged once the named CI check passes
-#   • no `auto-merge` label   → PR stays open for human review
+# THE PRECONDITION SET (invariant 10). All of them, every time:
+#   • the PR is open and not a draft
+#   • `auto-merge` on the PR or a linked issue        (opt-in, unchanged)
+#   • no guardrail path touched                       (unchanged)
+#   • no `needs-human-merge` / `review:escalated` / `review:broken-anchors`
+#   • no `priority:urgent`                            (RULES §6, now enforced)
+#   • the named CI check is green
+#   • at least one CURRENT approval — an approval given for a commit that is no
+#     longer the head is void
+#   • zero open change-requests (latest review per reviewer)
+#   • zero unresolved review threads
+#   • GitHub's own reviewDecision / mergeStateStatus does not disagree
 #
-# NAMED-CHECK design (ci_check_name, default analyze-and-test), deliberately
-# kept over "all checks green": an unrelated optional check must never be able
-# to block a merge. The named check is the repo's contract gate — in caller
-# repos its job runs ./tool/verify.sh.
+# DOCS-ONLY keeps its reviewless fast path (deliberate): a PR whose every file
+# the repo's CI path-ignores waives the CI check and the approval. It does NOT
+# waive an open change-request or an unresolved thread — most-restrictive-wins
+# outranks the fast path, because a human who said "no" to a docs PR said no.
 #
-# DOCS-ONLY fast path: if EVERY changed file is one the repo's CI path-ignores
-# (docs_only_paths), CI produces no check at all, so the merge treats CI as
-# not-applicable. GUARDRAIL PATHS (guardrail_paths input; default CLAUDE.md,
-# docs/RULES.md, .github/**) NEVER auto-merge — even with the label, even on
-# green CI: an agent must not be able to weaken its own guardrails via an
-# auto-merged "docs" PR (agent confusion, or injection via issue text).
-# PRECEDENCE: the guardrail check runs FIRST — a file matching BOTH
-# guardrail_paths and docs_only_paths is a guardrail file, and its PR is
-# disqualified from auto-merge entirely; it never reaches the docs-only test.
+# GUARDRAIL PRECEDENCE is unchanged: the guardrail check runs FIRST, so a file
+# matching both guardrail_paths and docs_only_paths is a guardrail file and its
+# PR is disqualified from the fast path entirely.
+#
+# ALL of the judging lives in actions/review-state — one evaluator, shared with
+# review-loop.yml and the replay test, so the merge gate and the rework loop can
+# never disagree about the state of a PR. This file only gathers candidates and
+# performs the merge.
+#
+# ⚠ ROLL-OUT NOTE (require_approval). A repo with no reviewer identity has
+# nothing that can ever approve, so `require_approval: true` means agent PRs
+# stop auto-merging and wait for a human — correct, but a change of behaviour.
+# Set `require_approval: false` to keep the pre-v2.5 behaviour until a reviewer
+# identity exists (SKA-011). The engine says so out loud on every such PR
+# rather than letting it sit silently.
 #
 # How a repo calls it. Triggers live in the caller: CI completion (normal path
-# for code PRs) plus the PR events that matter for docs-only PRs (which
-# produce NO CI-completion event) and for `auto-merge` labelled after CI went
-# green. Callers MUST declare permissions (silent 403s otherwise):
+# for code PRs) plus the PR events that matter for docs-only PRs (which produce
+# NO CI-completion event), for `auto-merge` labelled after CI went green, and
+# for reviews (an approval is now a merge trigger). Callers MUST declare
+# permissions (silent 403s otherwise):
 #
 #   name: Auto-merge
 #   on:
@@ -35,7 +51,9 @@
 #       workflows: ["CI"]         # the caller repo's CI workflow name
 #       types: [completed]
 #     pull_request:
-#       types: [opened, reopened, ready_for_review, labeled]
+#       types: [opened, reopened, ready_for_review, labeled, synchronize]
+#     pull_request_review:
+#       types: [submitted, dismissed]
 #   permissions:
 #     contents: write        # merge + delete branch
 #     pull-requests: write   # merge PRs
@@ -60,9 +78,17 @@ on:
         type: string
         default: "CLAUDE.md,docs/RULES.md,.github/**"
       docs_only_paths:
-        description: "Comma-separated globs the repo's CI path-ignores; a PR touching ONLY these merges without requiring the CI check (keep in sync with the caller's CI paths-ignore)"
+        description: "Comma-separated globs the repo's CI path-ignores; a PR touching ONLY these merges without requiring the CI check or an approval (keep in sync with the caller's CI paths-ignore)"
         type: string
         default: "docs/**,**/*.md"
+      require_approval:
+        description: "Require at least one CURRENT approval before auto-merging (contract step 4b). Set false ONLY while the repo has no reviewer identity that could ever approve — see the roll-out note above."
+        type: boolean
+        default: true
+      merge_method:
+        description: "merge | squash | rebase. NOTE: rebase and squash REWRITE the merged commits; that is fine at merge time (the PR is over) but never during a review."
+        type: string
+        default: merge
       runner:
         description: Runner label
         type: string
@@ -70,10 +96,13 @@ on:
 
 jobs:
   automerge:
-    # React to: a CI completion; a PR opened/reopened/ready; or specifically
-    # the auto-merge label being added (other labels would be pointless runs).
+    # React to: a CI completion; a PR opened/reopened/ready/synchronized; the
+    # auto-merge label specifically (other labels would be pointless runs); or
+    # a review — since v2.5.0 an approval is a merge trigger, and a dismissal
+    # can make a previously-mergeable PR un-mergeable.
     if: >-
       github.event_name == 'workflow_run' ||
+      github.event_name == 'pull_request_review' ||
       (github.event_name == 'pull_request' && github.event.action != 'labeled') ||
       (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'auto-merge')
     runs-on: ${{ inputs.runner }}
@@ -86,36 +115,19 @@ jobs:
       issues: write
       checks: read
     steps:
-      - name: Merge eligible PRs
+      # 1) Which PRs is this event about?
+      - name: Gather candidate PRs
+        id: candidates
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          CI_CHECK: ${{ inputs.ci_check_name }}
-          GUARDRAILS: ${{ inputs.guardrail_paths }}
-          DOCS_ONLY: ${{ inputs.docs_only_paths }}
         run: |
           set -euo pipefail
-
-          # Glob-match helper: bash `case` patterns, where `*` matches `/` —
-          # so `docs/**` covers any depth and `**/*.md` any directory.
-          matches_any() { # $1=file, $2=comma-separated globs
-            local f="$1" pats="$2" p
-            IFS=',' read -ra arr <<< "$pats"
-            for p in "${arr[@]}"; do
-              p="$(echo "$p" | xargs)"   # trim
-              [ -z "$p" ] && continue
-              # shellcheck disable=SC2254
-              case "$f" in $p) return 0 ;; esac
-            done
-            return 1
-          }
-
-          # 1) Gather candidate PR numbers for this event.
           prs=""
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
               echo "CI concluded '${{ github.event.workflow_run.conclusion }}' — nothing to merge."
-              exit 0
+              echo "prs=" >> "$GITHUB_OUTPUT"; exit 0
             fi
             # Find the open PR(s) for the branch CI ran on, via `gh pr list`
             # (needs only pull-requests:read). NOT `gh api actions/runs/<id>
@@ -127,94 +139,68 @@ jobs:
           else
             prs="${{ github.event.pull_request.number }}"
           fi
-          if [ -z "$prs" ]; then echo "No candidate PRs."; exit 0; fi
+          echo "prs=$(echo $prs)" >> "$GITHUB_OUTPUT"
+          [ -z "$prs" ] && echo "No candidate PRs."
+          exit 0
 
-          # 2) For each open candidate: merge if it wants auto-merge AND CI is
-          #    green (or it's a docs-only PR CI doesn't run for).
-          for pr in $prs; do
-            state="$(gh pr view "$pr" -R "$REPO" --json state -q .state 2>/dev/null || echo "")"
-            if [ "$state" != "OPEN" ]; then echo "#$pr not open ($state) — skip"; continue; fi
+      # 2) Judge. The evaluator is pure — it merges nothing and writes nothing;
+      #    its check log is the artefact an operator reads when a PR did not
+      #    merge, so it prints the facts for every candidate, held or not.
+      - name: Evaluate merge preconditions
+        id: state
+        if: ${{ steps.candidates.outputs.prs != '' }}
+        uses: sakal-dev/automation/actions/review-state@v2
+        with:
+          prs: ${{ steps.candidates.outputs.prs }}
+          token: ${{ github.token }}
+          ci_check_name: ${{ inputs.ci_check_name }}
+          guardrail_paths: ${{ inputs.guardrail_paths }}
+          docs_only_paths: ${{ inputs.docs_only_paths }}
+          require_approval: ${{ inputs.require_approval }}
 
-            # Linked issues — parse "Closes #n" from the PR BODY first (the
-            # GraphQL closingIssuesReferences link lags a freshly-opened PR);
-            # fall back to the API field only if the body has no closing keyword.
-            body="$(gh pr view "$pr" -R "$REPO" --json body -q .body 2>/dev/null || true)"
-            linked="$(printf '%s\n' "$body" \
-              | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
-              | grep -oE '[0-9]+' | sort -u || true)"
-            if [ -z "$linked" ]; then
-              linked="$(gh pr view "$pr" -R "$REPO" --json closingIssuesReferences \
-                          -q '.closingIssuesReferences[].number' 2>/dev/null || true)"
-            fi
-            # Does the PR itself, or a linked issue, carry `auto-merge`?
-            want=0
-            for iss in $linked; do
-              if gh issue view "$iss" -R "$REPO" --json labels -q '.labels[].name' \
-                   | grep -qx auto-merge; then want=1; break; fi
-            done
-            if gh pr view "$pr" -R "$REPO" --json labels -q '.labels[].name' | grep -qx auto-merge; then
-              want=1
-            fi
-            if [ "$want" != "1" ]; then echo "#$pr has no auto-merge label (PR or linked issue) — skip"; continue; fi
+      # 3) Merge what passed; say plainly why the rest did not.
+      - name: Merge what passed
+        if: ${{ steps.candidates.outputs.prs != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERDICTS: ${{ steps.state.outputs.verdicts }}
+          METHOD: ${{ inputs.merge_method }}
+          REQUIRE_APPROVAL: ${{ inputs.require_approval }}
+        run: |
+          set -uo pipefail
+          # Comment bodies are built with printf, never as a multi-line shell
+          # string: a line at column 0 inside a `run: |` block ends the YAML
+          # block scalar and the workflow stops parsing.
+          body() { printf '%s\n' "$@"; }
 
-            # SOLO-MODE ASSUMPTION (documented, not yet enforced): any PR that
-            # references `Closes #<auto-merge issue>` is trusted here, because
-            # today only the owner and the Claude app open PRs. When a teammate
-            # gets write access, gate on the PR author being the Claude app —
-            # uncomment:
-            #   author="$(gh pr view "$pr" -R "$REPO" --json author -q .author.login 2>/dev/null || echo "")"
-            #   if [ "$author" != "claude[bot]" ]; then
-            #     echo "#$pr not authored by the Claude app ($author) — not auto-merging."; continue
-            #   fi
+          echo "$VERDICTS" | jq -r '.[] | "#\(.pr): \(.decision)" + (if (.reasons|length)>0 then "\n" + (.reasons | map("    - " + .) | join("\n")) else "" end)'
 
-            # Read the changed files once — used for the guardrail check and
-            # the docs-only check below.
-            files="$(gh pr view "$pr" -R "$REPO" --json files -q '.files[].path' 2>/dev/null || true)"
-
-            # GUARDRAIL PATHS never auto-merge. A change to the agent's own
-            # rules or to CI always waits for a human — even with `auto-merge`,
-            # even on green CI. This check runs BEFORE the docs-only test, so
-            # a file matching both lists is treated as guardrail, and the PR
-            # is disqualified from the fast path entirely.
-            sensitive=0
-            while IFS= read -r f; do
-              [ -z "$f" ] && continue
-              if matches_any "$f" "$GUARDRAILS"; then sensitive=1; fi
-            done <<< "$files"
-            if [ "$sensitive" = "1" ]; then
-              echo "#$pr touches guardrail files ($GUARDRAILS) — human review required, not auto-merging."
-              continue
-            fi
-
-            # Docs-only? If EVERY changed file is one the repo's CI ignores,
-            # CI is not applicable and we merge without requiring the check;
-            # otherwise CI must be genuinely green. An unreadable file list is
-            # treated conservatively: CI required.
-            if [ -z "$files" ]; then
-              needs_ci=1
-            else
-              needs_ci=0
-              while IFS= read -r f; do
-                [ -z "$f" ] && continue
-                if ! matches_any "$f" "$DOCS_ONLY"; then needs_ci=1; fi
-              done <<< "$files"
-            fi
-
-            if [ "$needs_ci" = "1" ]; then
-              # Re-confirm the named check is green on the PR head (guards the
-              # PR-event paths, belt-and-suspenders on workflow_run).
-              sha="$(gh pr view "$pr" -R "$REPO" --json headRefOid -q .headRefOid)"
-              concl="$(gh api "repos/$REPO/commits/$sha/check-runs" \
-                --jq "[.check_runs[] | select(.name==\"$CI_CHECK\")] | last | .conclusion" 2>/dev/null || echo "")"
-              if [ "$concl" != "success" ]; then
-                echo "#$pr: $CI_CHECK not green (=$concl) — skip"; continue
+          # A PR that needs an approval nobody can give would sit silently
+          # forever. Say so ONCE, in the log and on the PR — a silent stall is
+          # the worst possible failure mode for a merge gate.
+          for pr in $(jq -r '.[] | select(.decision=="hold") | select(.reasons[]? | test("no approval")) | .pr' <<<"$VERDICTS"); do
+            reviewers=$(gh api "repos/$REPO/pulls/$pr/reviews" --jq 'length' 2>/dev/null || echo 0)
+            requested=$(gh api "repos/$REPO/pulls/$pr/requested_reviewers" --jq '(.users|length) + (.teams|length)' 2>/dev/null || echo 0)
+            if [ "${reviewers:-0}" = "0" ] && [ "${requested:-0}" = "0" ]; then
+              echo "::warning::#$pr needs an approval but has no reviewer and none requested. If this repo has no reviewer identity yet, nothing will ever approve it — either request a reviewer, or set require_approval: false on the automerge caller until one exists (SKA-011)."
+              marker="<!-- sakal-review-noreviewer: pr=$pr -->"
+              if ! gh api --paginate "repos/$REPO/issues/$pr/comments?per_page=100" --jq '.[].body' 2>/dev/null | grep -qF "$marker"; then
+                gh api -X POST "repos/$REPO/issues/$pr/comments" -f body="$(body \
+                  "This PR meets every merge precondition except one: it needs at least one approval, and no reviewer has been requested." \
+                  "" \
+                  "Nothing in this repository will approve it on its own. Either request a reviewer, approve it yourself, or — if this repo has no reviewer identity yet — set \`require_approval: false\` on the auto-merge caller until one exists." \
+                  "" \
+                  "$marker")" >/dev/null 2>&1 || true
               fi
-              echo "Merging #$pr (auto-merge + green CI)."
-            else
-              echo "Merging #$pr (auto-merge + docs-only, CI not applicable)."
             fi
+          done
 
-            if gh pr merge "$pr" -R "$REPO" --merge --delete-branch; then
+          for pr in $(jq -r '.[] | select(.decision=="merge") | .pr' <<<"$VERDICTS"); do
+            docs=$(jq -r --arg p "$pr" '.[] | select(.pr==($p|tonumber)) | .facts.docs_only' <<<"$VERDICTS")
+            linked=$(jq -r --arg p "$pr" '.[] | select(.pr==($p|tonumber)) | .facts.linked' <<<"$VERDICTS")
+            echo "Merging #$pr (all preconditions met; docs_only=$docs)."
+            if gh pr merge "$pr" -R "$REPO" "--$METHOD" --delete-branch; then
               # GitHub's native "Closes #n" auto-close is laggy/unreliable here
               # (the closing link often isn't indexed by merge time, and it's
               # suppressed entirely when the merge is done by GITHUB_TOKEN), so

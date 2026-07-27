@@ -61,3 +61,57 @@ human reply, every bot note — not just `@claude` mentions.
 **What we do.** Guard cheaply: an outer `if:` on the caller plus a first-step
 guard so a non-matching comment decides and exits in ~1 second, before any
 checkout or setup spends minutes of runner time.
+
+## 7. Events made with `GITHUB_TOKEN` do not trigger workflows
+
+**The fact.** The recursion guard behind constraint #3 is broader than PRs: a
+comment, label, or push created with the workflow's own `GITHUB_TOKEN` fires no
+`issue_comment`, `labeled`, or `push` workflow at all. The API call succeeds;
+nothing downstream ever runs.
+
+**What we do.** No engine step ever hands work to another workflow by writing an
+event and hoping. The review loop needed exactly that — "post `@claude` on the
+PR and let on-demand pick it up" — and it would have been silently dead on
+arrival; `review-loop.yml` runs the coder itself instead. Same lesson as
+v2.0.1: an instruction is not a mechanism, and neither is an event nobody
+delivers.
+
+## 8. You cannot review your own pull request
+
+**The fact.** `POST /pulls/{n}/reviews` with `event=APPROVE` or
+`REQUEST_CHANGES` on a PR you authored returns **422** — *"Can not request
+changes on your own pull request"*. Only `COMMENT` is allowed. This applies to
+bot identities exactly as it does to humans.
+
+**What we do.** The reviewer is a GitHub identity distinct from the coder
+(contract step 4b, invariant 13), and the engine **asserts** the difference in
+code rather than trusting configuration: a mis-wired reviewer would not error
+in any place an operator looks — the review path would simply go quiet. It also
+means no single-identity test can produce a live `changes_requested`, which is
+why `tool/test-review-loop.sh` replays those events.
+
+## 9. Review-thread resolution exists only in GraphQL
+
+**The fact.** REST can list review comments but cannot tell you whether a
+*thread* is resolved. `isResolved` lives on `reviewThreads`, which is GraphQL
+only — as is `mergeStateStatus`.
+
+**What we do.** `actions/review-state` reads the PR through one GraphQL query
+that carries threads, per-reviewer latest verdicts, `reviewDecision`, and
+`mergeStateStatus` together — one round-trip for facts REST cannot supply at
+all. `mergeStateStatus: UNKNOWN` means "still computing" and is deliberately
+NOT treated as disagreement; treating it as a block makes merges flaky.
+
+## 10. A GraphQL connection past `first: 100` comes back **null**, not an error you notice
+
+**The fact.** Connections cap `first:` at 100. Ask for more and the response
+carries an `errors` array while that one connection resolves to `null` — its
+siblings still return normal data, so the query *looks* like it worked.
+
+**What we do.** Every connection is requested within the cap, and the file list
+additionally carries `totalCount` so truncation is visible. Both ways of not
+seeing the changed files — a null connection, or a PR with more than 100 of
+them — **fail closed**, because an empty file list makes the guardrail check
+pass vacuously and that is precisely the auto-merge of `CLAUDE.md` the
+guardrail exists to prevent. *(Found live during SKA-010 with
+`files(first:300)`, which had been returning no files at all.)*

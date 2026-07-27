@@ -1,0 +1,50 @@
+# =============================================================================
+# review-anchors — did this push keep the review threads anchored? (SKA-010)
+# Contract: docs/task-contract.md step 4b, the append-only rule (invariant 11).
+#
+# PURE: it returns a verdict. Labels and comments are the workflow's business.
+#
+# verdict ∈ no-reviews | append-only | rewritten | unknown
+#   `unknown` is deliberately NOT a violation: a flaky compare call must never
+#   brand a PR as broken, because clearing that label is a human's job.
+# =============================================================================
+name: review-anchors
+description: "Decide whether a push to a reviewed PR was append-only or rewrote history"
+
+inputs:
+  pr:
+    description: PR number
+    required: true
+  before:
+    description: The head sha before the push (github.event.before, or recorded by the engine)
+    required: true
+  after:
+    description: The head sha after the push
+    required: true
+  force_check:
+    description: "true = judge lineage even if the PR has no reviews yet (the rework path, where a review certainly exists)"
+    required: false
+    default: "false"
+  token:
+    description: Token with pull-requests:read, contents:read
+    required: true
+
+outputs:
+  verdict:
+    description: "no-reviews | append-only | rewritten | unknown"
+    value: ${{ steps.anchors.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - name: Judge the push lineage
+      id: anchors
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        BEFORE: ${{ inputs.before }}
+        AFTER: ${{ inputs.after }}
+        FORCE_CHECK: ${{ inputs.force_check }}
+      run: bash "${{ github.action_path }}/review-anchors.sh"

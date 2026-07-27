@@ -1,0 +1,100 @@
+# =============================================================================
+# review-state — the merge-precondition evaluator (SKA-010).
+# Contract: docs/task-contract.md step 4b (REVIEW) + invariants 10–12.
+#
+# One judge, three callers: automerge.yml (to decide a merge), review-loop.yml
+# (to decide a rework), and tool/test-review-loop.sh (to assert both without
+# touching GitHub). Before this action, "may this merge?" lived inline in
+# automerge.yml and nowhere else, so the review rules had no home to be added
+# to — the whole reason request-changes had no defined behaviour.
+#
+# PURE BY CONSTRUCTION: this action makes no writes. It cannot merge, label, or
+# comment. That is what lets the same code path run in a dry run and in anger.
+#
+# It answers per PR: decision (merge|hold), reasons[] (every failed
+# precondition, not just the first), and facts{} (the numbers behind them,
+# including the rework-round count). A hold with no reason is a bug.
+# =============================================================================
+name: review-state
+description: "Evaluate the full merge-precondition set for one or more PRs — pure, no writes"
+
+inputs:
+  prs:
+    description: "PR numbers, space- or comma-separated"
+    required: true
+  token:
+    description: "Token with pull-requests:read, issues:read, checks:read on the caller repo"
+    required: true
+  ci_check_name:
+    description: The check-run name that must be green (the caller repo's CI job)
+    required: false
+    default: analyze-and-test
+  guardrail_paths:
+    description: "Comma-separated globs that NEVER auto-merge"
+    required: false
+    default: "CLAUDE.md,docs/RULES.md,.github/**"
+  docs_only_paths:
+    description: "Comma-separated globs the repo's CI path-ignores"
+    required: false
+    default: "docs/**,**/*.md"
+  require_approval:
+    description: "false only for repos that deliberately run without review (the pre-v2.5 behaviour). Docs-only PRs waive approval regardless."
+    required: false
+    default: "true"
+  automerge_label:
+    description: The opt-in merge label
+    required: false
+    default: auto-merge
+  needs_human_merge_label:
+    description: "Hard stop: this PR/area is merged by a human only"
+    required: false
+    default: needs-human-merge
+  broken_anchors_label:
+    description: "Hard stop: a force-push destroyed the review anchors"
+    required: false
+    default: "review:broken-anchors"
+  escalated_label:
+    description: "Hard stop: the rework cap was reached"
+    required: false
+    default: "review:escalated"
+  urgent_label:
+    description: "Hard stop: urgent work is never auto-merged (RULES §6)"
+    required: false
+    default: "priority:urgent"
+  max_rework_rounds:
+    description: "The rework cap. Decided here so the number that stops the loop and the number the merge gate reports are the same number."
+    required: false
+    default: "2"
+
+outputs:
+  verdicts:
+    description: 'JSON array: [{pr, decision, reasons[], facts{}}]'
+    value: ${{ steps.state.outputs.verdicts }}
+  mergeable:
+    description: "Space-separated PR numbers whose every precondition passed"
+    value: ${{ steps.state.outputs.mergeable }}
+  held:
+    description: "Space-separated PR numbers that failed at least one precondition"
+    value: ${{ steps.state.outputs.held }}
+
+runs:
+  using: composite
+  steps:
+    - name: Evaluate review state
+      id: state
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PRS: ${{ inputs.prs }}
+        CI_CHECK: ${{ inputs.ci_check_name }}
+        GUARDRAILS: ${{ inputs.guardrail_paths }}
+        DOCS_ONLY: ${{ inputs.docs_only_paths }}
+        REQUIRE_APPROVAL: ${{ inputs.require_approval }}
+        L_AUTOMERGE: ${{ inputs.automerge_label }}
+        L_NEEDS_HUMAN: ${{ inputs.needs_human_merge_label }}
+        L_BROKEN: ${{ inputs.broken_anchors_label }}
+        L_ESCALATED: ${{ inputs.escalated_label }}
+        L_URGENT: ${{ inputs.urgent_label }}
+        CAP: ${{ inputs.max_rework_rounds }}
+      run: bash "${{ github.action_path }}/review-state.sh"

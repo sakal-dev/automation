@@ -20,3 +20,20 @@ Never create an untyped/blank issue.
   of "checks pass".
 - When *filing* a bug you discovered: fill `Violates` honestly — naming the spec
   line it falsifies, or stating "no written claim exists" (that is a finding).
+
+## When your PR gets a review
+
+A PR here does not merge just because CI is green: it needs an approval, zero
+open change-requests, and zero unresolved threads (RULES §7). If a reviewer asks
+for changes you get another round on the **same branch**, and the rules of that
+round are binding (RULES §10):
+
+- **Append-only.** Never force-push, rebase, or amend a branch that has been
+  reviewed — review comments anchor to commits, and rewriting history detaches
+  every thread from the code it is about. The engine detects it and stops.
+- **Reply to threads, never resolve them.** Name the commit that fixes each
+  point. Only the reviewer or a human resolves a thread. Disagree in the thread
+  if you think a point is wrong; do not silently skip it.
+- **Two rework rounds, then a human** takes over (`review:escalated`).
+- **A red CI check is not a review round** — fix it and push.
+- You never review or approve your own PR, and you never merge.

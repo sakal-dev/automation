@@ -73,3 +73,55 @@ nothing stuck; leases expire).
 
 **Recovery.** Re-flip; the first claim retires any stale runs as
 `abandoned`. Proven in the 2026-07-24 rollback drill (#119 / PR #122).
+
+## 5. A PR meets every precondition but never merges (v2.5.0+)
+
+**Symptom.** Agent PRs stop auto-merging after the engine upgrade. CI is
+green, the `auto-merge` label is on, nothing looks wrong, and nothing happens.
+
+**Seen live:** predicted, not yet observed in production — this is the known
+consequence of shipping `require_approval: true` into repos that have no
+reviewer identity, so it is written down before it bites rather than after.
+
+**Diagnosis drill.**
+1. Read the automerge run's check log — `actions/review-state` prints every
+   failed precondition per PR. "no approval (need at least 1)" is the tell.
+2. `gh api repos/<r>/pulls/<n>/reviews --jq length` and
+   `gh api repos/<r>/pulls/<n>/requested_reviewers` — both zero means nothing
+   in the repo can ever approve this PR.
+3. The engine also comments once on the PR saying exactly this. If that
+   comment is there, stop diagnosing; it is this.
+
+**Fix.** Either give the repo a reviewer identity (SKA-011) and request it, or
+set `require_approval: false` on the automerge caller until you have one. A
+human approving works too, and is the honest interim answer for a repo with
+one maintainer.
+
+**Prevention (the rule).** *A precondition nothing can satisfy is a stall, not
+a gate.* Any new required condition ships with an answer to "what in this repo
+can satisfy it today?", and the engine says so on the PR rather than sitting
+silent.
+
+## 6. `review:broken-anchors` on a PR nobody force-pushed
+
+**Symptom.** A PR is labelled `review:broken-anchors`; the engine refuses to
+rework or merge it; the author swears they only pushed normally.
+
+**Diagnosis drill.**
+1. `gh api repos/<r>/compare/<before>...<after> --jq .status` with the two
+   shas from the workflow log. `diverged`/`behind` = history really was
+   rewritten; `ahead` = the engine was wrong and that is a bug worth a report.
+2. The usual innocent cause is a **rebase to satisfy "require branches to be
+   up to date"** in branch protection. That setting and append-only fight each
+   other — see `docs/branch-protection.md`.
+3. `git reflog` on the branch, or the PR's force-push timeline entry, names
+   who did it.
+
+**Fix.** A human's call, deliberately: either re-review from scratch (remove
+the label, ask the reviewer to look again — the old threads are unreliable) or
+close the PR and open a fresh one. The engine will not clear this label
+itself; a stale thread anchor is not something automation can judge.
+
+**Prevention (the rule).** Turn OFF *require branches to be up to date*, turn
+OFF *allow force pushes*. Merging main into the branch is append-only and
+fine; rebasing is not.

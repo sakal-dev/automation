@@ -1,6 +1,15 @@
-# Caller for the shared automation engine's label-gated merge
-# (sakal-dev/automation). Auto-merge is opt-in per issue; the named CI check
-# must be green; guardrail files never auto-merge (guardrail beats docs-only).
+# Caller for the shared automation engine's precondition-gated merge
+# (sakal-dev/automation). Auto-merge is opt-in per issue; every precondition in
+# docs/task-contract.md step 4b must hold — CI green, one CURRENT approval, no
+# open change-request, no unresolved thread, not draft, no hard-stop label —
+# and guardrail files never auto-merge (guardrail beats docs-only).
+#
+# ⚠ require_approval. A repo with no reviewer identity has nothing that can ever
+# approve, so agent PRs will wait for a human. That is correct, and it may not
+# be what you want yet: set `require_approval: false` below to keep the
+# pre-v2.5 behaviour (CI green + the label) until a reviewer exists. The engine
+# comments once on any PR stuck this way rather than letting it sit silently.
+#
 # Placeholders:
 #   <CI_WORKFLOW_NAME>  the `name:` of this repo's CI workflow (usually "CI")
 #   ci_check_name       ONLY needed if the repo's CI job is not named
@@ -12,7 +21,10 @@ on:
     workflows: ["<CI_WORKFLOW_NAME>"]
     types: [completed]
   pull_request:
-    types: [opened, reopened, ready_for_review, labeled]
+    types: [opened, reopened, ready_for_review, labeled, synchronize]
+  # An approval is a merge trigger; a dismissal can un-merge-able a PR.
+  pull_request_review:
+    types: [submitted, dismissed]
 
 # A reusable workflow cannot raise permissions beyond this grant — a missing
 # line here fails inside the engine as a silent 403.
@@ -27,4 +39,5 @@ jobs:
     uses: sakal-dev/automation/.github/workflows/automerge.yml@v2
     # with:
     #   ci_check_name: analyze-and-test
+    #   require_approval: false   # only while this repo has no reviewer identity
     secrets: inherit

@@ -1,0 +1,80 @@
+# =============================================================================
+# review-brief — assemble the REWORK brief for a change-requested PR (SKA-010).
+# Contract: docs/task-contract.md step 2 (BRIEF) applied to step 4b (REVIEW).
+#
+# PURE: prints the brief, writes it to the step summary and an output. It posts
+# nothing and runs nothing. The workflow decides what to do with it — which is
+# what lets tool/test-review-loop.sh assert the exact text a coder would have
+# been given without a GitHub round-trip.
+#
+# The review rides VERBATIM. Summarising a review is the engine choosing which
+# of the reviewer's points matter; that is not the engine's call.
+# =============================================================================
+name: review-brief
+description: "Assemble the verbatim rework brief for a PR whose review requested changes"
+
+inputs:
+  pr:
+    description: PR number
+    required: true
+  branch:
+    description: The PR head branch (where append-only commits must land)
+    required: true
+  reviewer:
+    description: Login of the reviewer who requested changes
+    required: true
+  review_body:
+    description: The review's summary text, verbatim
+    required: false
+    default: ""
+  rounds:
+    description: Which rework round this is
+    required: true
+  max_rework_rounds:
+    description: The cap, so the coder can see how much rope is left
+    required: false
+    default: "2"
+  extra_denylist_paths:
+    description: Repo-specific denylist additions
+    required: false
+    default: ""
+  token:
+    description: Token with pull-requests:read
+    required: true
+
+outputs:
+  text:
+    description: The assembled brief (markdown)
+    value: ${{ steps.brief.outputs.text }}
+  open_threads:
+    description: How many unresolved threads the brief carries
+    value: ${{ steps.brief.outputs.open_threads }}
+
+runs:
+  using: composite
+  steps:
+    - name: Assemble the rework brief
+      id: brief
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        BRANCH: ${{ inputs.branch }}
+        REVIEWER: ${{ inputs.reviewer }}
+        REVIEW_BODY: ${{ inputs.review_body }}
+        ROUNDS: ${{ inputs.rounds }}
+        CAP: ${{ inputs.max_rework_rounds }}
+        EXTRA_DENYLIST: ${{ inputs.extra_denylist_paths }}
+      run: |
+        set -uo pipefail
+        bash "${{ github.action_path }}/review-brief.sh" > /tmp/sakal-rework-brief.md
+        threads=$(grep -oE '^## Open threads — [0-9]+' /tmp/sakal-rework-brief.md | grep -oE '[0-9]+' | head -1)
+        echo "open_threads=${threads:-0}" >> "$GITHUB_OUTPUT"
+        {
+          echo "text<<SAKAL_REWORK_BRIEF_EOF"
+          cat /tmp/sakal-rework-brief.md
+          echo "SAKAL_REWORK_BRIEF_EOF"
+        } >> "$GITHUB_OUTPUT"
+        cat /tmp/sakal-rework-brief.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+        echo "::notice::rework brief assembled for #$PR round $ROUNDS ($(wc -c < /tmp/sakal-rework-brief.md) bytes, ${threads:-0} open threads)"
