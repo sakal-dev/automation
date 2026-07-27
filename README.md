@@ -1,10 +1,20 @@
 # SakalAutomation
 
 The central home for agent automation reused across every sakal-dev / Thalias
-project. It consolidates the hardened `sakalpos-garage` system, supports all
-seven execution methods, and runs in two modes: **standalone** (GitHub is the
+project. It consolidates the hardened `sakalpos-garage` system, supports every
+execution channel, and runs in two modes: **standalone** (GitHub is the
 queue — nothing else needed) and **integrated** (SakalMaster is the queue and
 the judge).
+
+> **Naming (2026-07-27).** The lab's numbered "methods" are **channels** —
+> where/how an agent executes; SakalMaster's enforceable `exec_method` values
+> are **credential classes** — what a run proves at the claim chokepoint.
+> Channels 1+2 are merged into one push-only channel, **Cloud dispatch**,
+> parameterized by provider (Claude Code on the web · Codex cloud). SakalMaster
+> now teaches Cloud dispatch in-product (Execution page: informational card +
+> flow dialog) as of 2026-07-27. Its first LOGGED run is still pending the
+> human browser dispatch — see the prepared experiment in `docs/methods/01`.
+> The numbered files 01…07 keep their names as the historical lab notebook.
 
 > **Current state: LIVE.** Engine v2 (OIDC, zero repo secrets) runs two
 > production repos; the integrated loop is proven end to end (a merged agent
@@ -17,7 +27,7 @@ the judge).
 ```
 1 SOURCE   where the task comes from      github issues | sakalmaster queue
 2 BRIEF    what the agent is told         issue body + ACs | sakal_get_brief
-3 EXECUTE  who does the work              methods 1–7 (NOTES.md §3)
+3 EXECUTE  who does the work              channels 1–7, 1+2 = Cloud dispatch (NOTES.md §3)
 4 GATE     how it is judged + reported    ./tool/verify.sh + PR → labels | agent_runs
            gate before PR · merge opt-in · agents never verify their own claims
 ```
