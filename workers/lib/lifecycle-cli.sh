@@ -5,7 +5,7 @@
 #   lifecycle-cli.sh claim            → {"claimed":bool, "task_ref":…, "run_id":…, "story_key":…}
 #   lifecycle-cli.sh brief            → {"brief_file":…}   (needs TASK_REF/RUN_ID/STORY_KEY env)
 #   lifecycle-cli.sh heartbeat        → {}
-#   lifecycle-cli.sh finish <outcome> [detail]
+#   lifecycle-cli.sh finish <outcome> [detail] [cost_usd]
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lifecycle.sh"
 
@@ -24,6 +24,6 @@ case "$cmd" in
   heartbeat)
     heartbeat; echo '{}' ;;
   finish)
-    finish "${1:?outcome}" "${2:-}"; echo '{}' ;;
+    finish "${1:?outcome}" "${2:-}" "${3:-}"; echo '{}' ;;
   *) echo "unknown command: $cmd" >&2; exit 2 ;;
 esac

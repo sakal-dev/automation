@@ -54,13 +54,16 @@ async function runOneTask(): Promise<boolean> {
   let outcome = "failed";
   let detail = "terminated before outcome";
   let sawSuccess = false;
+  // MEASURED cost, from the SDK's own result message. Stays undefined when the
+  // SDK didn't report one — never report a value you cannot back (session 12).
+  let costUsd: number | undefined;
   const abort = new AbortController();
   const onTerm = () => {
     // Release FIRST, fire-and-forget: the SDK's abort can take longer than a
     // stop grace period to unwind (observed live: SIGKILL beat the finally
     // and the claim stuck). A duplicate finish later is harmless — REST
     // label-DELETE 404s, sakal report_run rejects a second outcome.
-    void lifecycle("finish", ["failed", "SIGTERM fast-release"], taskEnv).catch(() => {});
+    void lifecycle("finish", ["failed", "SIGTERM fast-release", costUsd !== undefined ? String(costUsd) : ""], taskEnv).catch(() => {});
     abort.abort(new Error("SIGTERM"));
   };
   process.once("SIGTERM", onTerm);
@@ -127,6 +130,8 @@ async function runOneTask(): Promise<boolean> {
       if (message.type === "result") {
         // the SDK's terminal message; the gate below decides, not the agent
         const sub = "subtype" in message ? (message as any).subtype : "done";
+        const c = (message as any).total_cost_usd;
+        if (typeof c === "number") { costUsd = (costUsd ?? 0) + c; console.log(`[agent] cost: $${c}`); }
         console.log(`[agent] result: ${sub}`);
         if (sub === "success") sawSuccess = true;
       }
@@ -163,7 +168,7 @@ async function runOneTask(): Promise<boolean> {
     clearInterval(hb);
     process.removeListener("SIGTERM", onTerm);
     process.removeListener("SIGINT", onTerm);
-    await lifecycle("finish", [outcome, detail], taskEnv).catch(() => {});
+    await lifecycle("finish", [outcome, detail, costUsd !== undefined ? String(costUsd) : ""], taskEnv).catch(() => {});
     rmSync(WORKDIR, { recursive: true, force: true });
   }
   console.log(`[worker] task ${claim.task_ref}: ${outcome} (${detail})`);

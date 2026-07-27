@@ -39,9 +39,9 @@ while true; do
   # interruptible `wait` — bash defers traps while a foreground command runs,
   # so a foreground agent would swallow SIGTERM until SIGKILL and the release
   # would never fire (found by the kill test's design).
-  outcome="failed"; detail="terminated before outcome"
-  trap 'kill "${AGENT_BG:-}" "${HB:-}" 2>/dev/null || true; finish "$outcome" "$detail"; trap - EXIT INT TERM; exit 143' INT TERM
-  trap 'kill "${HB:-}" 2>/dev/null || true; finish "$outcome" "$detail"; trap - EXIT' EXIT
+  outcome="failed"; detail="terminated before outcome"; AGENT_COST=""
+  trap 'kill "${AGENT_BG:-}" "${HB:-}" 2>/dev/null || true; finish "$outcome" "$detail" "${AGENT_COST:-}"; trap - EXIT INT TERM; exit 143' INT TERM
+  trap 'kill "${HB:-}" 2>/dev/null || true; finish "$outcome" "$detail" "${AGENT_COST:-}"; trap - EXIT' EXIT
 
   rm -rf "$WORKDIR" && mkdir -p "$WORKDIR"
   echo "[loop] fresh clone of $REPO"
@@ -55,8 +55,16 @@ while true; do
 
   echo "[loop] agent starts on $TASK_REF"
   set +e
-  timeout "${TASK_TIMEOUT_SECONDS:-3600}" bash -c "$AGENT_CMD \"\$(cat "$BRIEF_FILE")\"" & AGENT_BG=$!
-  wait "$AGENT_BG"; agent_rc=$?
+  # Output is teed so the run's own cost can be MEASURED (session 12 STEP 2):
+  # `claude -p --output-format json` emits total_cost_usd on the result line.
+  # rc travels via a file because the pipeline's exit status is tee's.
+  ( timeout "${TASK_TIMEOUT_SECONDS:-3600}" bash -c "$AGENT_CMD \"\$(cat "$BRIEF_FILE")\""; echo "$?" > "$WORKDIR/agent.rc" ) \
+    | tee "$WORKDIR/agent.out" & AGENT_BG=$!
+  wait "$AGENT_BG"
+  agent_rc=$(cat "$WORKDIR/agent.rc" 2>/dev/null || echo 1)
+  # Report cost only when the runtime actually told us — never a guess.
+  AGENT_COST=$(grep -o '"total_cost_usd":[0-9.]*' "$WORKDIR/agent.out" 2>/dev/null | tail -1 | cut -d: -f2)
+  [ -n "$AGENT_COST" ] && echo "[loop] measured cost: \$$AGENT_COST"
   set -e
   kill "$HB" 2>/dev/null || true
 
@@ -71,7 +79,7 @@ while true; do
     outcome="blocked"; detail="tool/verify.sh failed after the agent's changes — needs a human look"
   fi
 
-  finish "$outcome" "$detail"; trap - EXIT INT TERM
+  finish "$outcome" "$detail" "${AGENT_COST:-}"; trap - EXIT INT TERM
   cd /; rm -rf "$WORKDIR"
   echo "[loop] iteration done: $outcome — next poll in ${POLL_SECONDS}s"
   sleep "$POLL_SECONDS"

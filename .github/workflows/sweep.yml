@@ -387,6 +387,7 @@ jobs:
           RUN_ID: ${{ steps.sclaim.outputs.run_id }}
           TASK: ${{ steps.sclaim.outputs.task_key }}
           AGENT_OUTCOME: ${{ steps.sagent.outcome }}
+          EXEC_FILE: ${{ steps.sagent.outputs.execution_file }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
@@ -400,6 +401,15 @@ jobs:
           H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
           RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
           jstr() { jq -Rn --arg v "$1" '$v'; }
+          # MEASURED cost (session 12 STEP 2): claude-code-action writes its run
+          # log to execution_file, whose result entry carries total_cost_usd.
+          # No file, no number → report no cost at all. Never invent one.
+          COST=""
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            COST=$(jq -r '[.. | objects | .total_cost_usd? // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)
+            [ -n "$COST" ] && echo "::notice::measured run cost: \$$COST"
+          fi
+          costf() { [ -n "$COST" ] && printf ',"p_cost_usd":%s' "$COST" || true; }
           report() { curl -sS -X POST "$RPC/report_run" "${H[@]}" -d "$1" >/dev/null || true; }
           outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
           if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
@@ -412,7 +422,7 @@ jobs:
           pr=$(gh pr list -R "$REPO" --state open --head "claude/task-$TASK" --json number -q '.[0].number' 2>/dev/null || true)
           if [ "$AGENT_OUTCOME" = "success" ] && [ -n "$pr" ]; then
             if ./tool/verify.sh; then
-              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"}"
+              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"$(costf)}"
               curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
                 -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
               echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
@@ -422,13 +432,13 @@ jobs:
             fi
           elif [ "$AGENT_OUTCOME" = "success" ] && [ -f .sakal-outcome ] && grep -q '^evidence:' .sakal-outcome; then
             ev=$(sed 's/^evidence:[[:space:]]*//' .sakal-outcome | head -c 2000)
-            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")}"
+            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")$(costf)}"
             curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
             echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
             echo "::notice::outcome: succeeded on existing-code evidence — task parked"; exit 0
           fi
-          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")}"
+          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")$(costf)}"
           echo "outcome=failed" >> "$GITHUB_OUTPUT"
           echo "::notice::outcome: failed — $detail"
 

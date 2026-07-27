@@ -44,9 +44,8 @@ inputs:
     required: false
     default: ""
   source:
-    description: Claim source recorded on the run
-    required: false
-    default: "github-sweep"
+    description: "What this run is DOING (asserted intent): github-sweep | github-mention | send-to-claude | manual. REQUIRED — no default, because a default silently lies for any caller it wasn't written for (session 12 audit). The runtime itself is DERIVED by SakalMaster from the credential into agent_runs.method; never restate it here."
+    required: true
   lease_seconds:
     description: Lease duration; heartbeats extend it
     required: false
@@ -120,9 +119,27 @@ runs:
         # on the OIDC path it always is — the mapping is the enforcement.
         if [ -n "$APP" ]; then payload="$payload,\"p_app\":\"$APP\""; fi
         payload="$payload}"
-        CLAIM=$(curl -sf -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/claim_next_task" \
+        # Status-aware: a method rejection is a 42501 with SakalMaster's own
+        # operator message, which -sf would swallow. Capture body + code.
+        BODY=$(mktemp)
+        CODE=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/claim_next_task" \
           -H "apikey: $ANON" -H "authorization: Bearer $JWT" \
           -H "content-type: application/json" -d "$payload")
+        if [ "$CODE" != "200" ]; then
+          MSG=$(jq -r '.message // .hint // .' "$BODY" 2>/dev/null || cat "$BODY")
+          case "$MSG" in
+            *"accepts work from"*)
+              # POLICY STOP (session 12 STEP 3): the app does not accept work
+              # from this runtime — and the runtime was PROVEN from the
+              # credential, so this is real misconfiguration, not a blip.
+              # Loud and terminal: no retry, no fallback to github mode.
+              echo "::error::METHOD REJECTED — $MSG"
+              echo "::error::Fix the app's allowed execution methods (App Management → this app), or run this task through an allowed method. This job will NOT retry or fall back."
+              exit 1 ;;
+            *) echo "::error::claim failed (HTTP $CODE): $MSG"; exit 1 ;;
+          esac
+        fi
+        CLAIM=$(cat "$BODY"); rm -f "$BODY"
         {
           echo "project=$PROJECT"
           echo "app=$APP"
@@ -130,7 +147,17 @@ runs:
         RUN=$(jq -r '.[0].run_id // empty' <<<"$CLAIM")
         if [ -z "$RUN" ]; then
           echo "claimed=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::SakalMaster queue empty for app '$APP' — nothing to claim."
+          # Paused and empty both return NO ROWS by design (a paused app must not
+          # fail a cron red every ten minutes). They mean different things to an
+          # operator, so name which one — one cheap read, on the cheap path.
+          PAUSED=$(curl -sf "$SAKAL_SUPABASE_URL/rest/v1/v_app_execution?app_key=eq.$APP&select=app_paused,project_paused" \
+            -H "apikey: $ANON" -H "authorization: Bearer $JWT" 2>/dev/null \
+            | jq -r '.[0] | if .project_paused then "project" elif .app_paused then "app" else "" end' 2>/dev/null || true)
+          if [ -n "$PAUSED" ]; then
+            echo "::notice::PAUSED ($PAUSED) — SakalMaster is withholding work deliberately. Clean exit, no retry; unpause in App Management to resume."
+          else
+            echo "::notice::SakalMaster queue empty for app '$APP' — nothing to claim."
+          fi
           exit 0
         fi
         {

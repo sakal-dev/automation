@@ -73,6 +73,21 @@ with this check; rollback between modes is that one line (drilled — see
   skipped — check its log.
 - **Stale `queued`/`running` runs** → leases self-heal: the next claim
   retires them `abandoned`. Nothing to clean by hand.
+- **"PAUSED (app|project)" in the log, runs green, nothing claimed** → NOT a
+  fault. Someone hit the kill switch: SakalMaster withholds work by returning
+  *no rows* (never an error, so a cron doesn't fail red every ten minutes).
+  Resume in App Management (unpause the app or the project) — or leave it
+  paused; sweeps keep exiting clean and cheap. Verify with
+  `v_app_execution` (`app_paused` / `project_paused`).
+- **"METHOD REJECTED — app X accepts work from: …"** → a POLICY stop, and the
+  loudest error the engine can raise. The app's allowed execution methods
+  don't include this runtime, and the runtime was DERIVED from the credential
+  (OIDC → `github-actions`, PAT → `worker`, MCP → `mcp`, session → `manual`)
+  — so it cannot be a mislabelled parameter. Fix the app's methods in App
+  Management, or run the task through an allowed method. **Never** "fix" it
+  by falling back to github mode; the engine deliberately does not retry.
+  `unprovable` in the message = a token minted before `sakal_auth` existed;
+  it self-clears within the 15-minute JWT TTL — just re-run.
 
 ## Diagnose, standalone mode — the checklist (answers inline)
 

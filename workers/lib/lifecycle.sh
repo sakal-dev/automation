@@ -31,6 +31,9 @@ sakal_rpc() { # $1=fn $2=json
     -H "content-type: application/json" -d "$2"
 }
 
+# JSON fragment for cost, or nothing at all when the runtime could not measure it.
+cost_field() { [ -n "${1:-}" ] && printf ',"p_cost_usd":%s' "$1" || true; }
+
 # ── claim ───────────────────────────────────────────────────────────────────
 # Sets TASK_REF (and RUN_ID for sakal). Returns 1 when nothing is claimable.
 claim() {
@@ -48,12 +51,56 @@ claim() {
     gh api -X POST "repos/$REPO/issues/$TASK_REF/labels" -f "labels[]=claude-working" >/dev/null
     echo "[claim] github issue #$TASK_REF"
   else
-    local payload='{"p_project":"'"$PROJECT"'","p_source":"manual","p_lease_seconds":'"${LEASE_SECONDS:-1800}"'}'
+    # HONEST SOURCE OR NOTHING (session 12). SakalMaster's source vocabulary has
+    # no value for an autonomous VPS worker: `manual` asserts a human did it and
+    # `mcp` (the RPC default) asserts the MCP door — both false. Requested as
+    # sakal-dev/sakalmaster#9 (`sweep`, runtime-neutral; runtime itself is DERIVED
+    # from the credential into agent_runs.method). Until it lands we refuse to
+    # claim rather than write a false ledger entry. Set SAKAL_SOURCE to override
+    # once the value exists (then this guard is dead code and comes out).
+    local src="${SAKAL_SOURCE:-}"
+    if [ -z "$src" ]; then
+      echo "[claim] REFUSING: no honest agent_runs.source value exists for a worker yet." >&2
+      echo "        Blocked on sakal-dev/sakalmaster#9 (add 'sweep'). Set SAKAL_SOURCE=sweep once merged." >&2
+      return 1
+    fi
+    local payload='{"p_project":"'"$PROJECT"'","p_source":"'"$src"'","p_lease_seconds":'"${LEASE_SECONDS:-1800}"'}'
     if [ -n "${APP:-}" ]; then payload=$(jq -c --arg a "$APP" '. + {p_app:$a}' <<<"$payload"); fi
-    local c; c=$(sakal_rpc claim_next_task "$payload") || return 1
+    local jwt body code
+    jwt=$(sakal_jwt) || return 1
+    body=$(mktemp); code=$(curl -sS -o "$body" -w '%{http_code}' -X POST \
+      "$SAKAL_URL/rest/v1/rpc/claim_next_task" \
+      -H "apikey: $SAKAL_ANON_KEY" -H "authorization: Bearer $jwt" \
+      -H "content-type: application/json" -d "$payload")
+    if [ "$code" != "200" ]; then
+      local msg; msg=$(jq -r '.message // .hint // .' "$body" 2>/dev/null || cat "$body")
+      rm -f "$body"
+      case "$msg" in
+        *"accepts work from"*)
+          # POLICY STOP: this runtime is not allowed for this app. Loud, and
+          # NEVER retried or fallen back — a misconfigured executor must be
+          # obvious (session 12 STEP 3).
+          echo "[claim] METHOD REJECTED — $msg" >&2
+          echo "        This is policy, not a transient failure: fix the app's execution methods (App Management) or run the task through an allowed method. Not retrying." >&2
+          exit 2 ;;
+        *) echo "[claim] claim failed (HTTP $code): $msg" >&2; return 1 ;;
+      esac
+    fi
+    local c; c=$(cat "$body"); rm -f "$body"
     RUN_ID=$(jq -r '.[0].run_id // empty' <<<"$c"); TASK_REF=$(jq -r '.[0].task_key // empty' <<<"$c")
     STORY_KEY=$(jq -r '.[0].story_key // empty' <<<"$c")
-    [ -z "$RUN_ID" ] && return 1
+    if [ -z "$RUN_ID" ]; then
+      # Empty and paused are both "no work" by design (SakalMaster returns rows,
+      # not an error, for a paused app/project) — but they mean different things
+      # to an operator, so say which. Never a retry storm either way.
+      if [ -n "${APP:-}" ]; then
+        local pz; pz=$(curl -sf "$SAKAL_URL/rest/v1/v_app_execution?app_key=eq.$APP&select=app_paused,project_paused" \
+          -H "apikey: $SAKAL_ANON_KEY" -H "authorization: Bearer $jwt" 2>/dev/null \
+          | jq -r '.[0] | select(.app_paused or .project_paused) | "paused"' 2>/dev/null || true)
+        [ "$pz" = "paused" ] && echo "[claim] app '$APP' is PAUSED — no work by design; exiting clean."
+      fi
+      return 1
+    fi
     echo "[claim] sakal task $TASK_REF (run $RUN_ID)"
   fi
 }
@@ -93,9 +140,12 @@ EOF
 }
 
 # ── report / release (the trap target — EVERY exit path lands here) ─────────
-# usage: finish <succeeded|failed|blocked|released> [detail]
+# usage: finish <succeeded|failed|blocked|released> [detail] [cost_usd]
+# cost is MEASURED by the runner (the only thing that knows) and reported
+# additively; omitted entirely when unknown — never report a value you cannot
+# back (session 12 STEP 2).
 finish() {
-  local outcome="${1:-released}" detail="${2:-}"
+  local outcome="${1:-released}" detail="${2:-}" cost="${3:-}"
   if [ "$SOURCE" = "github" ]; then
     case "$outcome" in
       blocked)
@@ -120,12 +170,13 @@ finish() {
     [ -z "${RUN_ID:-}" ] && return 0
     case "$outcome" in
       succeeded)
-        sakal_rpc report_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":$(jq -Rn --arg v "$detail" '$v')}" >/dev/null || true
+        sakal_rpc report_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":$(jq -Rn --arg v "$detail" '$v')$(cost_field "$cost")}" >/dev/null || true
         sakal_rpc set_task_agent_ready "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK_REF\",\"p_ready\":false}" >/dev/null || true ;;
       blocked)
+        [ -n "$cost" ] && sakal_rpc report_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\"$(cost_field "$cost")}" >/dev/null || true
         sakal_rpc block_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jq -Rn --arg v "$detail" '$v')}" >/dev/null || true ;;
       *)
-        sakal_rpc report_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jq -Rn --arg v "${detail:-terminated without outcome}" '$v')}" >/dev/null || true ;;
+        sakal_rpc report_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jq -Rn --arg v "${detail:-terminated without outcome}" '$v')$(cost_field "$cost")}" >/dev/null || true ;;
     esac
   fi
   echo "[finish] $outcome ${detail:+($detail)}"

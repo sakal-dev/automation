@@ -36,6 +36,24 @@ executor. `workers/fleet/docker-compose.yml` — one service per identity.
 - **Claude Code agent teams** — same-session parallelism, not queue
   workers; different problem. SKIP here.
 
+## If the fleet is revived: federated identity, not minted PATs
+
+The per-replica identity rule stands (it is a correctness rule, not just
+attribution — see the experiment below). But *how* those identities are
+obtained must change. Hand-minting a PAT per replica is the same
+per-tenant-manual-setup smell that OIDC removed for Actions: it does not
+scale past the builder's own org, and it leaves standing credentials whose
+only justification is "a worker might need one someday" (the exact habit
+that retired the `garage sweep` PAT on 2026-07-24).
+
+**Requirement for any future fleet:** replica identity comes from a
+federated mechanism — per-replica OIDC where the runtime can mint it (any
+Actions-hosted replica), or a signed installation token exchanged at start-up
+otherwise. Hand-minted PATs are the fallback of last resort, per
+`docs/CREDENTIALS_REQUIRED_CHECKLIST.md` rule 2. SakalMaster already derives
+`agent_runs.method` from the credential, so a federated worker identity also
+makes each replica's runtime *provable* rather than asserted.
+
 ## Experiment log
 
 ### 2026-07-22 — 2 mock replicas vs 2-issue queue — mechanics run

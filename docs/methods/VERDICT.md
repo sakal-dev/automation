@@ -4,6 +4,12 @@ The lab notebook's payout. Sources: real runs only — methods/01–07 logs,
 sessions 2–10 drains, the session-9 integrated flip. Consult this before
 onboarding repo #4; update it when a new real run changes a number.
 
+> **Cost provenance (from 2026-07-27):** per-run cost is now MEASURED by the
+> runtime and recorded in `agent_runs.cost_usd` (engine v2.2.0 + workers).
+> The figures below are the last prose-recorded ones; once runs accumulate,
+> read them from the ledger instead — and where a runtime cannot measure its
+> cost, the field stays empty rather than guessed.
+
 ## Per-method observed data
 
 | Method | Setup cost | Per-task wall | Per-task cost | Guardrails | Failure modes seen |

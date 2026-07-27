@@ -52,6 +52,10 @@ inputs:
     description: The question for the human (mode=blocked — REQUIRED there)
     required: false
     default: ""
+  cost_usd:
+    description: "MEASURED cost of the run so far (accumulates server-side). Leave EMPTY when the runtime cannot measure it — never report a number you cannot back."
+    required: false
+    default: ""
   lease_seconds:
     description: Lease extension on heartbeat/progress
     required: false
@@ -73,6 +77,7 @@ runs:
         ERRTXT: ${{ inputs.error }}
         PR_REF: ${{ inputs.pr_ref }}
         REASON: ${{ inputs.reason }}
+        COST: ${{ inputs.cost_usd }}
         LEASE: ${{ inputs.lease_seconds }}
         OIDC_AUDIENCE: sakalmaster
       run: |
@@ -97,6 +102,8 @@ runs:
         H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
         RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
         jstr() { jq -Rn --arg v "$1" '$v'; }
+        # cost fragment, or nothing at all when unmeasured
+        costf() { [ -n "${COST:-}" ] && printf ',"p_cost_usd":%s' "$COST" || true; }
         case "$MODE" in
           heartbeat)
             curl -sf -X POST "$RPC/report_run" "${H[@]}" \
@@ -106,10 +113,10 @@ runs:
               -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"running\",\"p_summary\":$(jstr "$SUMMARY"),\"p_lease_seconds\":$LEASE}" ;;
           succeeded)
             curl -sf -X POST "$RPC/report_run" "${H[@]}" \
-              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"succeeded\",\"p_pr_ref\":$(jstr "$PR_REF")}" ;;
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"succeeded\",\"p_pr_ref\":$(jstr "$PR_REF")$(costf)}" ;;
           failed)
             curl -sf -X POST "$RPC/report_run" "${H[@]}" \
-              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"failed\",\"p_error\":$(jstr "$ERRTXT")}" ;;
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN\",\"p_status\":\"failed\",\"p_error\":$(jstr "$ERRTXT")$(costf)}" ;;
           blocked)
             [ -z "$REASON" ] && { echo "::error::mode=blocked requires a reason"; exit 1; }
             curl -sf -X POST "$RPC/block_run" "${H[@]}" \
