@@ -17,7 +17,7 @@ onboarding repo #4; update it when a new real run changes a number.
 | 3 · CI sweep/on-demand (**default**) | ~14 min/repo (install skill) | in-batch; ~5 issues/run | ≈$1.8/issue | prompt denylist + engine gates + guardrail-paths | delayed crons (by design); silent-403 if caller perms drift |
 | 4 · headless loop | image + env file (~30 min first host) | 15–19 min | $1.31–$2.64 | prompt denylist; sandbox + firewall | 3 sandbox defects found+fixed (CDN ipset, DNS uid, GraphQL pool); none agent-side |
 | 5 · SDK worker | method 4 + npm build | comparable (2 tasks) | not yet captured | prompt + **hook-as-code (fired live)**; fast-release proven | 4 wrapper defects found+fixed (hook FPs ×2, SIGKILL race, late-stream-error) |
-| 1 · Claude Code web | none (browser) | — | human cloud quota | same gate on return | not yet run (needs the human's browser; prepared) |
+| 1 · Claude Code web | none (browser) | — | human cloud quota (**unmeasured** — no run) | same gate on return | **not yet run.** Dispatch attempted 2026-07-28: BOTH production queues empty (garage 0 actionable — all 15 issues genuinely `claude-blocked` on backend/product decisions; owner 0 open issues). Blocked on real work existing, not on the browser — see `01-claude-code-web.md` |
 | 2 · Codex cloud | — | — | — | — | **blocked: no account** — no verdict |
 | 6 · OpenClaw | recipe only | — | — | read+dispatch, never write | not run |
 | 7 · fleet (N×4/5) | compose file | n/a | n/a | per-replica identity = correctness | double-claim at N=2 (github mode); shared-token release collisions — both hardened |
