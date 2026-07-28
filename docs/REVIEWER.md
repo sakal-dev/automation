@@ -243,6 +243,50 @@ workflows; a review by `github-actions[bot]` (GITHUB_TOKEN) does **not**
 in standalone mode the reviewer can post a verdict, but only a *human's*
 request-changes starts a rework. One more reason the App identity matters.
 
+## Where it is installed, and what each repo can actually do (SKA-015)
+
+Both production repos carry the `reviewer.yml` and `review-loop.yml` callers.
+They are NOT equivalent, and the difference decides whether a PR can merge
+without a human:
+
+| | sakalpos-garage | sakalpos-owner |
+|---|---|---|
+| mode | `sakalmaster` | `github` |
+| reviewer | `sakal-master[bot]` (App) | `github-actions[bot]` |
+| `agent_authors` | `claude[bot]` | `claude[bot]` |
+| can the reviewer **approve**? | **yes** | **NO** — `can_approve_pull_request_reviews=false` |
+| does its review **trigger a rework**? | **yes** (installation token) | **no** (GITHUB_TOKEN triggers nothing, constraint #7) |
+| net effect | the loop closes | reviewer comments; **a human still approves**, and only a human's request-changes starts a rework |
+
+So installing the reviewer solves the approval treadmill in garage and **does
+not** solve it in owner. Owner has three honest exits, in order of preference:
+
+1. **Flip owner to integrated** (`source: sakalmaster` on its sweep + these two
+   callers) — the App reviews, can approve, and its review drives the rework.
+   Requires owner to be linked to a SakalMaster app.
+2. **Turn on** Settings → Actions → General → *Allow GitHub Actions to approve
+   pull requests*. Approvals then count; rework still needs a human, because
+   GITHUB_TOKEN events trigger nothing.
+   `gh api -X PUT repos/sakal-dev/sakalpos-owner/actions/permissions/workflow -F can_approve_pull_request_reviews=true -f default_workflow_permissions=read`
+3. **`require_approval: false`** on owner's automerge caller — back to the
+   pre-v2.5 posture for that repo only.
+
+Not flipped here: (2) weakens a protection GitHub disables by default, and that
+is an operator's decision, not an executor's.
+
+### `agent_authors` is `claude[bot]` in both — and a human login is never listed
+
+Verified from real PR history (`.user.login` over REST, not the gh CLI's
+`app/claude` rendering): garage has 29 `claude[bot]` PRs, owner 1.
+
+**The owner trap:** four owner PRs sit on `claude/*` branches and are authored
+by **`limsocheat` (type=User)** — VPS-worker runs signed with the operator's
+PAT. Listing `limsocheat` in `agent_authors` would make the reviewer review the
+operator's own hand-written PRs, so it is deliberately not listed. The
+consequence, stated rather than hidden: **PRs from a worker using a human PAT
+are not reviewed.** Fixing that needs the worker to carry its own bot identity —
+not a config change here.
+
 ## The provider seam
 
 `actions/review-agent` speaks only JSON findings and the GitHub API. The model
