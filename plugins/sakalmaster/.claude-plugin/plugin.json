@@ -1,5 +1,5 @@
 {
   "name": "sakalmaster",
-  "version": "0.1.0",
-  "description": "Get your project into SakalMaster. /sakal-onboard reads your repo — specs, docs, README, issues — drafts journeys, epics, stories, acceptance criteria and tasks, shows you a dry run, and writes nothing until you say yes. Re-runnable: a second run converges instead of duplicating."
+  "version": "0.4.0",
+  "description": "Get a project into SakalMaster from its own repo. /sakal-onboard-project prepares the project layer, /sakal-onboard-app prepares a codebase's stories, /sakal-verify is the hard gate, /sakal-submit sends only verified files. Everything lands in a committed .sakal/ directory you can read, edit and re-check before anything goes live."
 }

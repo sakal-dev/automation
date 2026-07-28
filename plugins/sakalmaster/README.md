@@ -8,13 +8,23 @@ you to re-type it.
 /plugin install sakalmaster@sakal-automation
 ```
 
-Then, in your repo — three commands, one purpose each:
+**After installing, and after any update: restart Claude Code.** Plugin
+commands, MCP registration and the tool registry each appear only after a
+restart. If a command says the tools are missing, that is what it means.
+
+Then, in your repo — four commands, one purpose each:
 
 ```
-/sakal-onboard   read the repo, write .sakal/        (sends nothing)
-/sakal-verify    lint .sakal/, problems in file:line (sends nothing)
-/sakal-submit    send verified files to SakalMaster
+/sakal-onboard-project   prepare the project layer (registry, journeys, epics)
+/sakal-onboard-app       prepare this codebase's stories and ACs
+/sakal-verify            the gate — problems in file:line words   (sends nothing)
+/sakal-submit            send verified files to SakalMaster
 ```
+
+The onboarding commands name the layer, so nothing has to stop and ask you
+which one you meant — and each validates that claim against your git remote and
+any existing `.sakal/` before it writes, so declaring the wrong one is refused
+rather than obeyed.
 
 Bare `/sakal-submit` **sends nothing**: it shows what is ready, what is blocked
 and why, and asks. Every command ends by naming the next step, so "what now?"

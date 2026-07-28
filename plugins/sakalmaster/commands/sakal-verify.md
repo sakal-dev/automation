@@ -2,6 +2,22 @@
 description: The hard gate — lint .sakal/ and report problems in file:line words. Whole tree or a scope.
 ---
 
+## FIRST, before anything else
+
+If the `sakal_*` MCP tools are not available in this session, print exactly this
+and stop:
+
+> **Restart Claude Code, then re-run this command.** The SakalMaster tools are
+> not registered in this session yet. (Plugin commands, MCP registration and the
+> tool registry after authentication each need a restart to appear.)
+
+Do not list paths, do not read `~/.claude.json`, do not run `python3 -c`, do not
+open config files. Check tool presence, and `claude mcp list` if you need more.
+A customer's first interaction should not be an approval dialog about this
+plugin's own internals.
+
+## Then
+
 Run the gate over `.sakal/`. **This is the same verifier `/sakal-submit` runs —
 there is exactly one implementation of these checks**, at
 `${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs`.
