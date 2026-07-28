@@ -27,6 +27,13 @@
 # request-changes must say what would flip it — the coder gets two rounds, and
 # "fix it" spends one of them on nothing.
 #
+# EVERY STEP IN A CLOSED AGENT LOOP IS TRIGGERED BY ANOTHER BOT, and
+# claude-code-action refuses bot-triggered runs by default. So the reviewer must
+# allow the CODER (whose push triggers a re-review) and review-loop must allow
+# the REVIEWER (whose verdict triggers a rework). Miss either and the loop
+# half-works in the most misleading way possible: the first review lands, and
+# nothing after it ever does.
+#
 # COST OF BEING WRONG. A hallucinated request-changes burns a rework round out
 # of two. The prompt therefore requires refute-yourself-first: every claim is
 # checked against the code before it is asserted, and an unverifiable suspicion
@@ -73,6 +80,15 @@ on:
         description: "Comma-separated logins whose PRs get reviewed. Humans review humans."
         type: string
         default: "claude[bot],claude-bot"
+      allowed_bots:
+        description: >-
+          Bot logins whose push may trigger a review. REQUIRED for re-review to
+          work at all: claude-code-action refuses bot-triggered runs unless the
+          triggering bot is listed (default is "no bots"), and a re-review is
+          triggered by the CODER's push — a bot. Name your coder here, never '*'.
+          Symmetric to review-loop's allowed_bots, which names the reviewer.
+        type: string
+        default: "claude,claude[bot],claude-bot"
       max_files:
         description: Past this many files the review degrades to "too large, human requested"
         type: number
@@ -206,6 +222,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # A re-review is triggered by the coder pushing — a bot. Without this
+          # the FIRST review works and every RE-review dies. Found live, garage
+          # run 30330314097: "non-human actor: claude (type: Bot)".
+          allowed_bots: ${{ inputs.allowed_bots }}
           claude_args: '--max-turns 80 --model ${{ inputs.model }} --allowedTools "Read,Glob,Grep,Bash,Write"'
           prompt: |
             You are the REVIEWER for pull request #${{ github.event.pull_request.number }}
