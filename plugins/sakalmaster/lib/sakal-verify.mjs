@@ -32,6 +32,7 @@ const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] :
 const DIR = opt('--dir', '.sakal')
 const ROOT = opt('--repo-root', '.')
 const SERVER = opt('--server', null)
+const SCOPE = opt('--scope', null)   // limit reporting/readiness to a subtree or file
 const JSON_OUT = args.includes('--json')
 
 const problems = []
@@ -181,9 +182,15 @@ if (scope === 'app') {
     for (const k of server.journeys ?? []) journeys.set(k, { key: k, line: 0, fields: {} })
     for (const k of server.epics ?? []) epics.set(k, { key: k, line: 0, fields: {} })
   }
+  // THE SEAM, ENFORCED (SKA-018 Part 2). An app-scoped directory may not DEFINE
+  // a project-layer entity anywhere except proposals/, which submit never
+  // sends. Definitions elsewhere are an ERROR, not a warning: a warning is
+  // something you can ship past, and this one silently forks the project layer
+  // across eleven repos.
   for (const local of ['registry/personas.yaml', 'registry/goals.yaml', 'registry/modules.yaml', 'journeys.yaml', 'epics.yaml'])
     if (existsSync(join(dirAbs, local)))
-      warn(`${DIR}/${local}`, 1, 'REDRAFT', 'scope is app, but this file re-drafts a project-layer entity', 'an app-scoped directory REFERENCES the project layer by key; it does not restate it. Genuinely-new project entities go in findings.md for review.')
+      err(`${DIR}/${local}`, 1, 'PROJECTDEF', 'an app-scoped .sakal/ must not DEFINE project-layer entities',
+        `the project layer lives in the spec-home repo. Delete this file and reference the keys instead; if you genuinely need a NEW one, put it in ${DIR}/proposals/ — verify acknowledges it and submit never sends it.`)
 }
 
 if (projectLayerLocal) {
@@ -217,7 +224,9 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   const key = fm.key?.value
   if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
   if (stories.has(key)) err(f, fm.key.line, 'DUPKEY', `story key "${key}" is used by another file`, `also in ${stories.get(key).file}`)
-  stories.set(key, { file: f, line: fm.key.line })
+  stories.set(key, { file: f, line: fm.key.line, refs: {
+    epic: fm.epic?.value, journey: fm.journey?.value, persona: fm.persona?.value,
+    module: fm.module?.value, app: fm.app?.value } })
 
   for (const k of ['title', 'epic', 'persona', 'app', 'module'])
     if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on a story`, 'ENTITIES.md marks it required — the write is refused without it')
@@ -266,6 +275,25 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   if (acs === 0) err(f, fm.key.line, 'NOACS', `story ${key} has no acceptance criteria`, 'a story with no testable claim promises nothing')
 }
 
+// proposals/ — new project-layer entities an app repo discovered. Acknowledged
+// so they are visible, and deliberately NOT loaded into the reference maps: a
+// proposal must not satisfy a story's reference, or it would behave exactly
+// like the definition it is not.
+const proposalsDir = join(dirAbs, 'proposals')
+const proposals = []
+if (existsSync(proposalsDir)) {
+  // Any file, not just .md — a proposal is as likely to be a .yaml registry
+  // fragment as a story. (walk() filters to .md for the stories tree.)
+  const anyFile = d => readdirSync(d, { withFileTypes: true }).flatMap(e =>
+    e.isDirectory() ? anyFile(join(d, e.name)) : [join(d, e.name)])
+  for (const p of anyFile(proposalsDir)) {
+    proposals.push(rel(p))
+    problems.push({ sev: 'info', file: rel(p), line: 1, code: 'PROPOSAL',
+      msg: 'project-layer proposal — acknowledged, and NEVER submitted from here',
+      fix: 'carry it to the spec-home repo by hand. Two app repos can propose the same persona and neither can tell — check the spec-home/server before carrying it over.' })
+  }
+}
+
 // The guest we do not touch. Said out loud so nobody wonders if it was missed.
 if (existsSync(join(dirAbs, 'context.md')))
   problems.push({ sev: 'info', file: `${DIR}/context.md`, line: 1, code: 'IGNORED', msg: 'desktop artifact — ignored and untouched by design', fix: '' })
@@ -279,13 +307,45 @@ if (server) {
   drift = { onlyLocal: [...want].filter(k => !have.has(k)), onlyServer: [...have].filter(k => !want.has(k)), both: [...want].filter(k => have.has(k)) }
 }
 
+// ── submit readiness (one implementation, used by /sakal-submit) ────────────
+// A story is READY when everything it references already exists ON THE SERVER.
+// Anything else is BLOCKED, with the reason said the way a person would say it.
+let readiness = null
+if (server) {
+  const ns = cfg.app?.value ?? cfg.project?.value
+  const onServer = {
+    epic: new Set(server.epics ?? []), journey: new Set(server.journeys ?? []),
+    persona: new Set(server.personas ?? []), module: new Set(server.modules ?? []),
+    story: new Set(server.stories ?? []),
+  }
+  readiness = { ready: [], blocked: [], already: [] }
+  for (const [key, st] of stories) {
+    if (onServer.story.has(`spec:${ns}:${key}`)) { readiness.already.push({ key, file: st.file }); continue }
+    const missing = []
+    for (const [field, set] of [['epic', onServer.epic], ['journey', onServer.journey], ['persona', onServer.persona], ['module', onServer.module]]) {
+      const v = st.refs?.[field]
+      if (v && !set.has(v)) missing.push({ field, value: v })
+    }
+    if (missing.length) {
+      const m = missing[0]
+      readiness.blocked.push({ key, file: st.file,
+        why: `${key} references ${m.field} ${m.value}, which is not in SakalMaster yet — submit ${m.field === 'epic' ? 'epics.yaml' : m.field === 'journey' ? 'journeys.yaml' : `registry/${m.field}s.yaml`} first`,
+        missing })
+    } else readiness.ready.push({ key, file: st.file })
+  }
+}
+
 // ── report ───────────────────────────────────────────────────────────────────
-const errors = problems.filter(p => p.sev === 'error')
-const warns = problems.filter(p => p.sev === 'warn')
-const infos = problems.filter(p => p.sev === 'info')
+const inScope = p => !SCOPE || p.file.includes(SCOPE.replace(/^\.\//, '')) || p.file.endsWith('config.yaml')
+const scoped = problems.filter(inScope)
+const errors = scoped.filter(p => p.sev === 'error')
+const warns = scoped.filter(p => p.sev === 'warn')
+const infos = scoped.filter(p => p.sev === 'info')
 
 if (JSON_OUT) {
-  console.log(JSON.stringify({ ok: !errors.length, scope, counts: { journeys: journeys.size, epics: epics.size, stories: stories.size }, problems, drift }, null, 2))
+  console.log(JSON.stringify({ ok: !errors.length, scope, scopeFilter: SCOPE,
+    counts: { journeys: journeys.size, epics: epics.size, stories: stories.size },
+    problems: scoped, drift, readiness, proposals }, null, 2))
   process.exit(errors.length ? 1 : 0)
 }
 
@@ -296,8 +356,16 @@ for (const p of [...errors, ...warns, ...infos]) {
   console.log(`  ${tag} ${p.file}:${p.line}  [${p.code}] ${p.msg}`)
   if (p.fix) console.log(`         ↳ ${p.fix}`)
 }
+if (readiness) {
+  console.log(`\n  submit readiness${SCOPE ? ` (scope: ${SCOPE})` : ''}:`)
+  const inS = x => !SCOPE || x.file.includes(SCOPE.replace(/^\.\//, ''))
+  const r = readiness.ready.filter(inS), b = readiness.blocked.filter(inS), a = readiness.already.filter(inS)
+  console.log(`    ready: ${r.length}   blocked: ${b.length}   already in SakalMaster: ${a.length}`)
+  for (const x of r) console.log(`      ready    ${x.key}`)
+  for (const x of b) console.log(`      blocked  ${x.why}`)
+}
 if (drift) {
-  console.log(`\n  drift vs the server, read live just now:`)
+  console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just the scope):`)
   if (!drift.onlyLocal.length && !drift.onlyServer.length) console.log('    none — files and SakalMaster agree')
   if (drift.onlyLocal.length) console.log(`    ${drift.onlyLocal.length} in files, NOT yet in SakalMaster: ${drift.onlyLocal.join(', ')}`)
   if (drift.onlyServer.length) {

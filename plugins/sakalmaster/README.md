@@ -8,11 +8,17 @@ you to re-type it.
 /plugin install sakalmaster@sakal-automation
 ```
 
-Then, in your repo:
+Then, in your repo — three commands, one purpose each:
 
 ```
-/sakal-onboard
+/sakal-onboard   read the repo, write .sakal/        (sends nothing)
+/sakal-verify    lint .sakal/, problems in file:line (sends nothing)
+/sakal-submit    send verified files to SakalMaster
 ```
+
+Bare `/sakal-submit` **sends nothing**: it shows what is ready, what is blocked
+and why, and asks. Every command ends by naming the next step, so "what now?"
+is never a question you hold alone.
 
 ## What happens — three phases over a `.sakal/` directory
 
