@@ -22,7 +22,7 @@ implementation lands session by session (garage extraction next).
 The **seven methods are execution runtimes** (Claude Code web, Codex cloud,
 claude-code-action, headless loop, SDK worker, OpenClaw, orchestrators). The
 **workflow files** (`sweep`, `on-demand`, `automerge`, `claude-done`,
-`review-loop`, `verify`) all belong to **method 3 only**. Do not conflate the
+`review-loop`, `reviewer`, `verify`) all belong to **method 3 only**. Do not conflate the
 lists; do not call a workflow a "method".
 
 Review vocabulary (contract step 4b): **coder** = the agent that authored the
@@ -46,6 +46,13 @@ automerge, **operator** = the human, and final. A *rework round* is one
 - **Two rework rounds per PR**, counted from review history AND a PR-body
   marker, whichever is higher. The engine may never gain a path that keeps a
   coder/reviewer pair talking past the cap.
+- **The reviewer is never the coder, and never gains `Contents: Write`.** No
+  second GitHub App is ever added for it (one install per customer, ever) —
+  integrated repos review as the SakalMaster App with a server-minted token,
+  standalone repos as `github-actions[bot]`. `contents: read` on the reviewer
+  job is what makes merging impossible; it is a mechanism, not a formality.
+- **A review always ends in a verdict**, and a `request-changes` says what would
+  flip it. Findings with no verdict are refused at submit time, not warned about.
 - Review-loop state lives in the `review:*` namespace plus
   `needs-human-merge`. `claude-ready` / `claude-blocked` stay human-steered
   (v2.4.0) — nothing in the review loop touches them.

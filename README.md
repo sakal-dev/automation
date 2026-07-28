@@ -43,10 +43,10 @@ that document's checklist.
 ```
 .github/workflows/    reusable workflows (workflow_call) — method 3 engines:
                       sweep, on-demand, automerge, claude-done, review-loop,
-                      verify
+                      reviewer, verify
 actions/              composite actions: setup-project, claim-github,
                       claim-sakal, report-sakal, authority-gate,
-                      review-state, review-brief, review-anchors
+                      review-state, review-brief, review-anchors, review-agent
 workers/              VPS executors — headless-loop (m4), sdk-worker (m5),
                       docker sandbox
 .claude-plugin/       this repo is also a plugin marketplace
@@ -56,6 +56,8 @@ plugins/sakal-automation/
                       template, CLAUDE.md block
 docs/
   task-contract.md    the spec everything obeys
+  REVIEWER.md         who reviews, why there is no second App, the trust trade
+  branch-protection.md  recommended protection rules (recommended, not applied)
   github-constraints.md  the platform facts that shaped the design
   methods/01…07.md    the experiment lab notebook, one file per method
 ```

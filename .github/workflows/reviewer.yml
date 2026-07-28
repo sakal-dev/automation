@@ -1,0 +1,316 @@
+# =============================================================================
+# reviewer.yml — the independent REVIEWER (METHOD 3 engine; SKA-011)
+# Contract: docs/task-contract.md step 4b — the Reviewer role. SKA-010 built
+# what happens AFTER a review; this is what produces one.
+#
+# THE IDENTITY, AND WHY THERE IS NO NEW APP (operator doctrine, 2026-07-27).
+# A second GitHub App would be a per-org install — per-tenant ceremony, which
+# ZERO-CONFIG forbids. So the reviewer reuses an identity that is already
+# there and is already not the coder:
+#
+#   integrated repos → the SakalMaster App (`sakal-master[bot]`). Already
+#                      installed, already receives review events. Its token is
+#                      minted SERVER-SIDE by SakalMaster from an OIDC proof —
+#                      the App private key never comes near a runner or a repo
+#                      secret. That is the whole point of the arrangement.
+#   standalone repos → `github-actions[bot]` via the job's own GITHUB_TOKEN.
+#                      Zero setup, also ≠ the coder.
+#
+# THE REVIEWER CANNOT PUSH, AND CANNOT MERGE — STRUCTURALLY, NOT BY PROMISE.
+# Merging a PR needs `contents: write`; this job grants `contents: read`, and
+# the SakalMaster App installation is never granted Contents: Write. Take that
+# rider away and the reviewer silently becomes a merger. It is load-bearing.
+#
+# WHAT A REVIEW MUST BE (verdict discipline — SKA-001's lesson, twice-missed):
+# every review ENDS in approve / comment / request-changes. Findings without a
+# verdict is not a review, and the submit step refuses to post one. A
+# request-changes must say what would flip it — the coder gets two rounds, and
+# "fix it" spends one of them on nothing.
+#
+# COST OF BEING WRONG. A hallucinated request-changes burns a rework round out
+# of two. The prompt therefore requires refute-yourself-first: every claim is
+# checked against the code before it is asserted, and an unverifiable suspicion
+# is a question in the summary, not a finding.
+#
+# How a repo calls it (triggers + permissions live in the CALLER):
+#
+#   name: Reviewer
+#   on:
+#     pull_request:
+#       types: [opened, reopened, ready_for_review, synchronize]
+#   permissions:
+#     contents: read         # NEVER write — this is what stops a reviewer merging
+#     pull-requests: write   # submit reviews
+#     issues: write          # needs-human-merge on the dangerous list
+#     id-token: write        # OIDC → SakalMaster mints the App token (integrated)
+#   jobs:
+#     review:
+#       uses: sakal-dev/automation/.github/workflows/reviewer.yml@v2
+#       secrets: inherit
+# =============================================================================
+name: reviewer
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: Model for the review run
+        type: string
+        default: claude-opus-4-8
+      source:
+        description: "github (reviewer = github-actions[bot]) | sakalmaster (reviewer = the SakalMaster App)"
+        type: string
+        default: "github"
+      reviewer_kind:
+        description: "auto (derive from source) | github-actions | sakalmaster-app"
+        type: string
+        default: "auto"
+      app_bot_login:
+        description: Bot login of the SakalMaster App
+        type: string
+        default: "sakal-master[bot]"
+      agent_authors:
+        description: "Comma-separated logins whose PRs get reviewed. Humans review humans."
+        type: string
+        default: "claude[bot],claude-bot"
+      max_files:
+        description: Past this many files the review degrades to "too large, human requested"
+        type: number
+        default: 60
+      max_lines:
+        description: Past this many changed lines the review degrades to "too large, human requested"
+        type: number
+        default: 1500
+      max_rework_rounds:
+        description: Quoted back to the coder so a request-changes is actionable
+        type: number
+        default: 2
+      extra_instructions:
+        description: "Repo-specific review guidance. PRECEDENCE: nothing here may loosen verdict discipline, the dangerous list, or the read-only rule."
+        type: string
+        default: ""
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-latest
+      sakal_supabase_url:
+        description: SakalMaster SUPABASE project URL
+        type: string
+        default: "https://yfsempkvvdglebtlkztn.supabase.co"
+      sakal_supabase_publishable_key:
+        description: Supabase publishable key (public)
+        type: string
+        default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+
+jobs:
+  review:
+    runs-on: ${{ inputs.runner }}
+    concurrency:
+      group: reviewer-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read          # NEVER write. This is the reviewer-cannot-merge guarantee.
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      # --- The reviewer's credential. Resolved FIRST, because everything after
+      # it is meaningless if the wrong account is about to speak. ------------
+      - name: Resolve the reviewer identity
+        id: cred
+        env:
+          SRC: ${{ inputs.source }}
+          KIND_IN: ${{ inputs.reviewer_kind }}
+          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+        run: |
+          set -uo pipefail
+          kind="$KIND_IN"
+          if [ "$kind" = "auto" ]; then
+            if [ "$SRC" = "sakalmaster" ]; then kind="sakalmaster-app"; else kind="github-actions"; fi
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "::notice::reviewer identity class: $kind"
+
+          if [ "$kind" != "sakalmaster-app" ]; then
+            echo "use_app=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # SERVER-SIDE CUSTODY. The App's private key stays in SakalMaster; the
+          # runner proves who it is with OIDC and receives a short-lived
+          # installation token scoped to THIS repo. Nothing is stored anywhere.
+          # Putting the key in an org secret instead would hand every workflow
+          # in the org a credential that can read every repo — the opposite of
+          # what this design is for.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::reviewer: no OIDC available — grant 'permissions: id-token: write' in the caller"; exit 1
+          fi
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r '.value // empty')
+          CODE=$(curl -sS -o /tmp/apptok.json -w '%{http_code}' -X POST \
+            "$SAKAL_SUPABASE_URL/functions/v1/github-app-token" \
+            -H "apikey: $ANON" -H "content-type: application/json" \
+            -d "{\"oidc\":\"$OIDC\",\"permissions\":{\"pull_requests\":\"write\"}}" 2>/dev/null || echo "000")
+          if [ "$CODE" = "404" ] || [ "$CODE" = "000" ]; then
+            echo "::error::reviewer: SakalMaster does not expose /functions/v1/github-app-token (HTTP $CODE). The integrated reviewer CANNOT run without it, and this workflow will NOT fall back to github-actions[bot] — a silent identity swap is exactly the bug this whole role exists to prevent. See docs/REVIEWER.md § 'What SakalMaster still owes'."
+            exit 1
+          fi
+          TOK=$(jq -r '.token // empty' /tmp/apptok.json 2>/dev/null)
+          if [ -z "$TOK" ]; then
+            echo "::error::reviewer: token-mint failed (HTTP $CODE): $(head -c 400 /tmp/apptok.json)"; exit 1
+          fi
+          echo "::add-mask::$TOK"
+          echo "app_token=$TOK" >> "$GITHUB_OUTPUT"
+          echo "use_app=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::reviewer: minted a short-lived SakalMaster App token (server-side custody; not stored)"
+
+      - name: Reviewer pre-flight
+        id: pre
+        uses: sakal-dev/automation/actions/review-agent@v2
+        with:
+          mode: preflight
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ steps.cred.outputs.use_app == 'true' && steps.cred.outputs.app_token || github.token }}
+          reviewer_kind: ${{ steps.cred.outputs.kind }}
+          app_bot_login: ${{ inputs.app_bot_login }}
+          agent_authors: ${{ inputs.agent_authors }}
+          max_files: ${{ inputs.max_files }}
+          max_lines: ${{ inputs.max_lines }}
+
+      # A degraded outcome is still a REVIEW — "too large to review honestly"
+      # and "this PR is unreviewable by the platform" both get posted as real
+      # comment verdicts. Skipping silently would leave a PR that looks
+      # reviewed and is not.
+      - name: Speak the degraded verdict
+        if: ${{ steps.pre.outputs.go != 'true' && (steps.pre.outputs.stop_mode == 'too-large' || steps.pre.outputs.stop_mode == 'escalate') }}
+        uses: sakal-dev/automation/actions/review-agent@v2
+        with:
+          mode: submit
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ steps.cred.outputs.use_app == 'true' && steps.cred.outputs.app_token || github.token }}
+          head: ${{ steps.pre.outputs.head }}
+          reviewer_login: ${{ steps.pre.outputs.reviewer_login }}
+          stop_mode: ${{ steps.pre.outputs.stop_mode }}
+          stop_reason: ${{ steps.pre.outputs.stop_reason }}
+
+      - name: Checkout the PR head (read-only)
+        if: ${{ steps.pre.outputs.go == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Review the diff
+        id: agent
+        if: ${{ steps.pre.outputs.go == 'true' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 80 --model ${{ inputs.model }} --allowedTools "Read,Glob,Grep,Bash,Write"'
+          prompt: |
+            You are the REVIEWER for pull request #${{ github.event.pull_request.number }}
+            of ${{ github.repository }}, reviewing as `${{ steps.pre.outputs.reviewer_login }}`.
+            You are NOT the author (`${{ steps.pre.outputs.author }}`) and you are not on their side.
+
+            YOU ARE READ-ONLY. Do not edit any file of this repository, do not commit, do
+            not push, do not merge, do not label, do not comment, and do not run any `gh`
+            command that writes. The ONLY file you may write is `.sakal-review.json`
+            in the repo root. The workflow submits your review; you do not.
+
+            ## What to review
+            Head `${{ steps.pre.outputs.head }}`, ${{ steps.pre.outputs.files_count }} file(s),
+            ${{ steps.pre.outputs.lines_count }} changed line(s).
+            Read the diff with `gh pr diff ${{ github.event.pull_request.number }}`, and read the
+            surrounding code — a diff read on its own is how a reviewer misses that a guard
+            already existed, or that this one is in the wrong layer.
+
+            Review ONLY these files: ${{ steps.pre.outputs.reviewable }}
+            Do NOT report findings in these (verified generated): ${{ steps.pre.outputs.generated }}
+            These LOOK generated but carry no generated-marker, so they ARE yours to review:
+            ${{ steps.pre.outputs.unmarked_generated }}
+
+            What the PR claims to deliver (its linked issues and their acceptance criteria):
+            ${{ steps.pre.outputs.acs }}
+
+            Judge the change against those criteria AND against this repo's own conventions
+            (CLAUDE.md and the rules doc it imports). A PR that does something good other
+            than what it claimed is still a PR that did not do what it claimed — say so.
+
+            ## REFUTE YOURSELF FIRST — this is the rule that makes you worth running
+            A wrong `request-changes` costs the author a whole rework round out of
+            ${{ inputs.max_rework_rounds }}, and it costs the operator real money. So before you
+            assert ANY finding, try to prove yourself wrong:
+              - open the file and read the actual code, at the actual line;
+              - check whether the thing you are about to demand already exists elsewhere
+                (a guard in another layer, an existing test, a helper);
+              - check whether the behaviour you think is broken is covered by a test;
+              - if the codebase already does it this way everywhere else, your finding is
+                about the codebase's convention, not about this PR — drop it or say that.
+            If after that you still cannot VERIFY a suspicion against the code, it is not a
+            finding. Put it in the summary as an explicit open question. Never assert
+            something you did not check.
+
+            ## Dangerous list — flag loudly, never wave through
+            Data loss, dropped tables or columns, deletes and cascade deletes, production
+            config, migrations, credentials, and money or idempotency paths. The workflow has
+            already detected these signals and will force `needs-human-merge`:
+            ${{ steps.pre.outputs.dangerous }}
+            For each one, say in your review whether it is actually dangerous here and why —
+            an unexamined signal is noise, and noise trains people to ignore the flag.
+
+            ## Your output — `.sakal-review.json`, exactly this shape
+            ```json
+            {
+              "verdict": "approve" | "comment" | "request-changes",
+              "summary": "2-6 sentences. What this PR does, whether it does what it claimed, and why the verdict.",
+              "what_would_flip_it": "REQUIRED for request-changes: the specific, checkable changes that would make this an approve.",
+              "findings": [
+                {"file": "lib/foo.dart", "line": 42, "severity": "blocker|major|minor|note",
+                 "body": "What is wrong, the evidence you checked, and what to do instead."}
+              ]
+            }
+            ```
+            - `line` must be a line the PR actually touches on the RIGHT side of the diff, or
+              omit `file`/`line` entirely and the finding goes in the review body.
+            - EVERY REVIEW ENDS IN A VERDICT. Findings without a verdict is not a review and
+              will be refused. An empty `findings` list with `"verdict": "approve"` is a fine
+              review; silence is not.
+            - `approve` means: I checked, and I would merge this. Not "I found nothing to say".
+            - `request-changes` means: something here is wrong enough to be worth a whole
+              rework round. Use `comment` for anything smaller.
+            ${{ inputs.extra_instructions }}
+
+      - name: Measure the review's cost
+        id: cost
+        if: ${{ always() && steps.pre.outputs.go == 'true' }}
+        env:
+          EXEC_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: |
+          set -uo pipefail
+          note=""
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            c=$(jq -r '[.. | objects | .total_cost_usd? // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)
+            [ -n "$c" ] && note="Review cost: \$$c (measured)." && echo "::notice::review cost: \$$c"
+          fi
+          # No file, no number → say nothing. Never invent a cost (v2.2.0).
+          [ -z "$note" ] && echo "::notice::review cost unmeasured — reporting none"
+          echo "note=$note" >> "$GITHUB_OUTPUT"
+
+      - name: Submit the review
+        if: ${{ always() && steps.pre.outputs.go == 'true' }}
+        uses: sakal-dev/automation/actions/review-agent@v2
+        with:
+          mode: submit
+          pr: ${{ github.event.pull_request.number }}
+          token: ${{ steps.cred.outputs.use_app == 'true' && steps.cred.outputs.app_token || github.token }}
+          findings_file: .sakal-review.json
+          head: ${{ steps.pre.outputs.head }}
+          reviewer_login: ${{ steps.pre.outputs.reviewer_login }}
+          dangerous: ${{ steps.pre.outputs.dangerous }}
+          dangerous_count: ${{ steps.pre.outputs.dangerous_count }}
+          generated: ${{ steps.pre.outputs.generated }}
+          unmarked_generated: ${{ steps.pre.outputs.unmarked_generated }}
+          files_count: ${{ steps.pre.outputs.files_count }}
+          lines_count: ${{ steps.pre.outputs.lines_count }}
+          cost_note: ${{ steps.cost.outputs.note }}
+          max_rework_rounds: ${{ inputs.max_rework_rounds }}

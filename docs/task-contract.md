@@ -274,6 +274,30 @@ does not fail loudly — the review path simply goes quiet, which is the worst
 way for a safety mechanism to break. Humans may review at any time, in any
 role, without configuration.
 
+**Which identity — and no new install for it.** A dedicated reviewer App would
+mean a second installation in every customer org, which `ZERO-CONFIG` forbids:
+one install per customer, ever. The reviewer therefore reuses an identity that
+already exists and already is not the coder — the **SakalMaster App** in
+integrated mode (its token minted server-side from an OIDC proof, so the private
+key never reaches a runner or a repo secret), and **`github-actions[bot]`** in
+standalone mode. Full reasoning, the accepted key-concentration trade, and the
+two things that must land before the integrated path works: `docs/REVIEWER.md`.
+
+**The reviewer cannot merge, structurally.** Merging a PR requires
+`contents: write`; the reviewer job grants `contents: read` and the SakalMaster
+App installation is granted `contents: read`. *The SakalMaster App must never be
+granted `Contents: Write`* — that single rider is what keeps "judges the work"
+and "lands the work" apart, on both paths.
+
+**A review always ends in a verdict.** Findings without a verdict is not a
+review; it is a pile of comments that decides nothing. An `approve` carries a
+summary (no bare stamps), and a `request-changes` states **what would flip it**
+— the coder has two rounds, and "fix it" spends one on nothing. Where an honest
+verdict is impossible — a diff too large to have been read, or a PR the platform
+cannot review because the reviewer authored it — the reviewer says exactly that
+as a `comment` verdict and asks for a human. It never skips silently: a PR
+nobody reviewed must not look reviewed.
+
 ### Merge preconditions — all of them, every time
 
 A PR merges automatically only when **all** of these hold:

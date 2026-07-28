@@ -1,0 +1,204 @@
+# =============================================================================
+# review-agent — the independent REVIEWER (SKA-011), in two modes.
+# Contract: docs/task-contract.md step 4b — the Reviewer role.
+#
+#   preflight  decides whether this PR may be reviewed BY THIS IDENTITY, and
+#              assembles the facts (diff size, generated files, dangerous-list
+#              signals, linked ACs). Pure: posts nothing.
+#   submit     turns findings into a REAL GitHub review — approve / comment /
+#              request-changes — in one atomic call, and names every failure
+#              mode instead of dying generically.
+#
+# The model sits BETWEEN the two, in the workflow. That seam is the provider
+# seam: swap claude-code-action for a Codex action and everything either side
+# is unchanged, because both modes speak only JSON findings and the GitHub API.
+#
+# IDENTITY IS DERIVED, NOT CONFIGURED. `reviewer_kind` picks the credential
+# class and the login together, so they cannot drift apart. A drifted reviewer
+# identity fails as SILENCE — GitHub answers self-review with 422 — which is
+# the one failure nobody notices.
+#
+# THE REVIEWER CANNOT PUSH. Not by promise: the calling job grants
+# `contents: read`, and for the App path the installation is never granted
+# Contents: Write. Structural, on both paths.
+# =============================================================================
+name: review-agent
+description: "Review an agent PR under an identity that is not the author's, and submit a real verdict"
+
+inputs:
+  mode:
+    description: "preflight | submit"
+    required: true
+  pr:
+    description: PR number
+    required: true
+  token:
+    description: "The REVIEWER's token — never the coder's"
+    required: true
+  reviewer_kind:
+    description: "github-actions (GITHUB_TOKEN → github-actions[bot]) | sakalmaster-app (the SakalMaster App → its bot login)"
+    required: false
+    default: github-actions
+  app_bot_login:
+    description: "Bot login of the SakalMaster App, used for the author≠reviewer assertion and idempotency"
+    required: false
+    default: "sakal-master[bot]"
+  agent_authors:
+    description: "Comma-separated logins whose PRs get reviewed. Humans review humans."
+    required: false
+    default: "claude[bot],claude-bot"
+  max_files:
+    description: "Past this many files a review degrades to 'too large, human requested'"
+    required: false
+    default: "60"
+  max_lines:
+    description: "Past this many changed lines a review degrades to 'too large, human requested'"
+    required: false
+    default: "1500"
+  # submit-mode inputs
+  findings_file:
+    description: "submit: path to the reviewer's findings JSON"
+    required: false
+    default: ".sakal-review.json"
+  head:
+    description: "submit: the reviewed head sha"
+    required: false
+    default: ""
+  reviewer_login:
+    description: "submit: from preflight"
+    required: false
+    default: ""
+  stop_mode:
+    description: "submit: preflight's degraded mode (too-large | escalate), if any"
+    required: false
+    default: ""
+  stop_reason:
+    description: "submit: preflight's reason text"
+    required: false
+    default: ""
+  dangerous:
+    description: "submit: preflight's dangerous-list JSON"
+    required: false
+    default: "[]"
+  dangerous_count:
+    description: "submit: how many dangerous-list signals"
+    required: false
+    default: "0"
+  generated:
+    description: "submit: files excluded as generated"
+    required: false
+    default: "[]"
+  unmarked_generated:
+    description: "submit: files that look generated but carry no marker (reviewed, and named)"
+    required: false
+    default: "[]"
+  files_count:
+    description: "submit: file count, for the review footer"
+    required: false
+    default: "0"
+  lines_count:
+    description: "submit: changed-line count, for the review footer"
+    required: false
+    default: "0"
+  cost_note:
+    description: "submit: measured cost sentence, or empty when unmeasured (never invent one)"
+    required: false
+    default: ""
+  max_rework_rounds:
+    description: "submit: quoted back to the coder so request-changes is actionable"
+    required: false
+    default: "2"
+
+outputs:
+  go:
+    description: "'true' if this PR may be reviewed"
+    value: ${{ steps.pre.outputs.go }}
+  reviewer_login:
+    description: The identity that will speak
+    value: ${{ steps.pre.outputs.reviewer_login }}
+  head:
+    description: Reviewed head sha
+    value: ${{ steps.pre.outputs.head }}
+  author:
+    description: PR author login
+    value: ${{ steps.pre.outputs.author }}
+  stop_mode:
+    description: "skip | escalate | too-large (empty when go=true)"
+    value: ${{ steps.pre.outputs.stop_mode }}
+  stop_reason:
+    description: Why it is not being reviewed normally
+    value: ${{ steps.pre.outputs.stop_reason }}
+  dangerous:
+    description: Dangerous-list signals (JSON)
+    value: ${{ steps.pre.outputs.dangerous }}
+  dangerous_count:
+    description: How many dangerous-list signals
+    value: ${{ steps.pre.outputs.dangerous_count }}
+  generated:
+    description: Files excluded as generated (JSON)
+    value: ${{ steps.pre.outputs.generated }}
+  unmarked_generated:
+    description: Files that look generated but say nothing (JSON)
+    value: ${{ steps.pre.outputs.unmarked_generated }}
+  reviewable:
+    description: Files the reviewer should actually read (JSON)
+    value: ${{ steps.pre.outputs.reviewable }}
+  files_count:
+    description: Changed files
+    value: ${{ steps.pre.outputs.files_count }}
+  lines_count:
+    description: Changed lines
+    value: ${{ steps.pre.outputs.lines_count }}
+  acs:
+    description: Linked issues' titles and bodies — what the PR claims to do
+    value: ${{ steps.pre.outputs.acs }}
+  linked:
+    description: Linked issue numbers
+    value: ${{ steps.pre.outputs.linked }}
+  review_url:
+    description: The submitted review's URL
+    value: ${{ steps.sub.outputs.review_url }}
+  verdict:
+    description: The submitted verdict
+    value: ${{ steps.sub.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reviewer pre-flight
+      id: pre
+      if: ${{ inputs.mode == 'preflight' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        REVIEWER_KIND: ${{ inputs.reviewer_kind }}
+        APP_BOT_LOGIN: ${{ inputs.app_bot_login }}
+        AGENT_AUTHORS: ${{ inputs.agent_authors }}
+        MAX_FILES: ${{ inputs.max_files }}
+        MAX_LINES: ${{ inputs.max_lines }}
+      run: bash "${{ github.action_path }}/preflight.sh"
+
+    - name: Submit the review
+      id: sub
+      if: ${{ inputs.mode == 'submit' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ inputs.pr }}
+        FINDINGS_FILE: ${{ inputs.findings_file }}
+        HEAD: ${{ inputs.head }}
+        REVIEWER_LOGIN: ${{ inputs.reviewer_login }}
+        STOP_MODE: ${{ inputs.stop_mode }}
+        STOP_REASON: ${{ inputs.stop_reason }}
+        DANGEROUS: ${{ inputs.dangerous }}
+        DANGEROUS_COUNT: ${{ inputs.dangerous_count }}
+        GENERATED: ${{ inputs.generated }}
+        UNMARKED: ${{ inputs.unmarked_generated }}
+        FILES_COUNT: ${{ inputs.files_count }}
+        LINES_COUNT: ${{ inputs.lines_count }}
+        COST_NOTE: ${{ inputs.cost_note }}
+        CAP: ${{ inputs.max_rework_rounds }}
+      run: bash "${{ github.action_path }}/submit.sh"

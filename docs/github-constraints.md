@@ -127,3 +127,51 @@ them — **fail closed**, because an empty file list makes the guardrail check
 pass vacuously and that is precisely the auto-merge of `CLAUDE.md` the
 guardrail exists to prevent. *(Found live during SKA-010 with
 `files(first:300)`, which had been returning no files at all.)*
+
+## 11. Raising an App's permissions changes nothing until the install accepts
+
+**The fact.** Editing a GitHub App's declared permissions does not touch any
+existing installation. Each org admin must accept an update banner; until they
+do, the installation keeps its OLD permission set and the App's calls fail with
+403 — even though the App's own settings page says otherwise.
+
+**What we do.** Never read the App's settings page as evidence. Read the
+**granted** set on the installation, which is what actually applies:
+
+```bash
+gh api orgs/<org>/installations \
+  --jq '.installations[] | select(.app_slug=="sakal-master") | .permissions'
+```
+
+`actions/review-agent` names this specifically on a 403 rather than failing
+generically, because it is a one-time click and sending an operator to debug
+their token instead is a waste of an afternoon. *(Verified live 2026-07-27:
+installation 148436031 read `pull_requests: read` while the App had been
+updated — SKA-011's human gate, unmet.)*
+
+## 12. `github-actions[bot]` may be forbidden from approving
+
+**The fact.** "Allow GitHub Actions to approve pull requests" (org and repo,
+Settings → Actions → General) is **off** by default. With it off, a review
+submitted by `GITHUB_TOKEN` with `event=APPROVE` fails: *"GitHub Actions is not
+permitted to approve pull requests."* `COMMENT` and `REQUEST_CHANGES` still work.
+
+**What we do.** The reviewer detects that exact message and **downgrades the
+approve to a comment that states the verdict in words**, rather than faking it
+in the API or dropping it. Auto-merge then correctly keeps waiting for a human
+approval — the PR stalls visibly instead of merging on a verdict GitHub never
+recorded. The setting is the operator's to turn on.
+
+## 13. An identity cannot review its own pull request
+
+**The fact.** `POST /pulls/{n}/reviews` with `APPROVE` or `REQUEST_CHANGES` on a
+PR you authored returns 422 — *"Can not request changes on your own pull
+request"*. Bots included. Only `COMMENT` is permitted.
+
+**What we do.** The reviewer asserts author ≠ reviewer *before* spending a run,
+and treats a PR authored by the reviewing identity as **unreviewable by the
+platform** — escalated to a human with a real comment verdict, never silently
+skipped. On the wire, the 422 is matched specifically: without that, it falls
+into the generic-422 branch and gets misreported as a bad line anchor, sending
+the operator to debug the wrong thing. *(Both behaviours found live, on a real
+PR, during SKA-011.)*

@@ -1,0 +1,39 @@
+# Caller for the shared automation engine's REVIEWER (sakal-dev/automation).
+# The engine owns the behaviour: identity resolution, the author≠reviewer
+# assertion, idempotency per head sha, the dangerous list, the size guard, and
+# verdict discipline. This file owns the triggers and the permissions.
+#
+# ⚠ THE PERMISSIONS BLOCK IS A SAFETY MECHANISM, NOT BOILERPLATE.
+# `contents: read` is what makes the reviewer unable to merge — merging a PR
+# needs `contents: write`. Raise it and the reviewer silently becomes a merger.
+# There is no reason for this workflow to ever have write access to code.
+#
+# WHO REVIEWS: on `source: github` (the default) it is `github-actions[bot]`,
+# which needs nothing set up. On `source: sakalmaster` it is the SakalMaster
+# App — see docs/REVIEWER.md, which lists the two things that must land before
+# that path works. The engine fails loudly rather than quietly reviewing as
+# somebody else.
+#
+# If this repo's agent PRs are authored by something other than `claude[bot]`
+# (a VPS worker signs its PRs with a per-host PAT, so they appear as a human),
+# set `agent_authors` or nothing will be reviewed.
+name: Reviewer
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read # NEVER write — this is the reviewer-cannot-merge guarantee
+  pull-requests: write # submit reviews
+  issues: write # needs-human-merge on the dangerous list
+  id-token: write # OIDC → SakalMaster mints the App token (integrated only)
+
+jobs:
+  review:
+    uses: sakal-dev/automation/.github/workflows/reviewer.yml@v2
+    # with:
+    #   agent_authors: "claude[bot]"   # whose PRs get reviewed
+    #   source: sakalmaster            # reviewer = the SakalMaster App
+    #   max_lines: 1500                # past this, "too large — human requested"
+    secrets: inherit
