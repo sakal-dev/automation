@@ -35,6 +35,16 @@
 # `changes_requested` reviews and nothing else — a flaky test must never spend
 # a repo's rework budget.
 #
+# THE LOOP ONLY CLOSES AUTOMATICALLY IN INTEGRATED MODE. A review submitted by
+# the SakalMaster App (an installation token) DOES trigger this workflow —
+# proven live, garage run 30329768778. A review submitted by
+# `github-actions[bot]` does NOT: it is made with GITHUB_TOKEN, and
+# GITHUB_TOKEN events trigger nothing (docs/github-constraints.md #7). So in
+# STANDALONE mode the reviewer can post a verdict but cannot start a rework —
+# only a HUMAN's request-changes drives the loop there. That is a property of
+# the platform, not a gap in this file, and it is one more reason the App
+# identity matters.
+#
 # WHY THE COMMENT-TRIGGER PATH IS NOT USED. The obvious design is "post an
 # @claude comment on the PR and let on-demand.yml pick it up". It does not
 # work: events generated with the built-in GITHUB_TOKEN do not trigger
@@ -89,6 +99,17 @@ on:
         description: "Comma-separated logins whose PRs this loop reworks. A human's PR is never reworked by the engine — a human wrote it, a human answers the review."
         type: string
         default: "claude[bot],claude-bot,github-actions[bot]"
+      allowed_bots:
+        description: >-
+          Bot logins whose review may drive a rework run. REQUIRED for the loop to
+          close at all: claude-code-action refuses bot-triggered runs unless the
+          triggering bot is listed here (default is "no bots"), and a rework is by
+          definition triggered by the reviewer — a bot. Keep this a TIGHT allowlist
+          naming your reviewer. Never '*': the rework prompt is assembled from the
+          review's text, so allowing any bot to trigger it lets any App that can
+          review your repo choose what the coder is told to do.
+        type: string
+        default: "sakal-master,sakal-master[bot]"
       ci_check_name:
         description: The check-run name that must be green before merging
         type: string
@@ -329,6 +350,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Without this the rework CANNOT run: the action refuses a run whose
+          # triggering actor is a bot, and the reviewer is a bot by design.
+          # Found live — garage run 30329768778: "Workflow initiated by
+          # non-human actor: sakal-master (type: Bot)".
+          allowed_bots: ${{ inputs.allowed_bots }}
           additional_permissions: |
             actions: read
           claude_args: '--max-turns 120 --model ${{ inputs.model }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
