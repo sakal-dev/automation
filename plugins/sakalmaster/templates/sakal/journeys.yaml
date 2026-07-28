@@ -1,0 +1,6 @@
+# End-to-end paths a persona takes. Project-scoped.
+journeys:
+  - <XX-J1> — <the path, named as an outcome>
+    goal: <XX-G1>
+    persona: <persona-key>
+    source: docs/<file>.md#<anchor>

@@ -14,25 +14,31 @@ Then, in your repo:
 /sakal-onboard
 ```
 
-## What happens
+## What happens — three phases over a `.sakal/` directory
 
-1. It checks three things and tells you if any is missing: the SakalMaster MCP is
-   connected, a project exists, and this repo is linked as a codebase.
-2. It prints **where it is about to write** — project, codebase, environment —
-   and waits for you to confirm that is the right target.
-3. It reads your repo: specs, docs, README, open issues, and the shape of the
-   code itself.
-4. It shows you a **dry run** — counts, one full sample branch, what it could
-   not classify, and anything missing that the structure needs.
-5. You say yes. Only then does it write anything.
-6. Run it again after your specs change: it converges on the stable keys and
-   reports deltas. It does not duplicate, and it never deletes.
+1. **PREPARE.** It reads your repo — specs, docs, README, issues, the shape of
+   the code — and writes a draft into `.sakal/` as structured files. Nothing
+   leaves your machine. Every story and acceptance criterion carries a `source:`
+   pointing at the document that justifies it; anything it drafted without a
+   document behind it says so.
+2. **VERIFY.** A linter over those files tells you what is wrong in `file:line`
+   terms. You fix it by editing the files and running verify again. Green verify
+   is required before anything can be submitted.
+3. **SUBMIT.** Only verified files go to SakalMaster, through your own
+   credential. It reads the server back first and shows you the delta before it
+   writes.
+
+`.sakal/` is **committed to your repo** by design. It is your project's
+spec-as-code seed, and the working copy for every future correction: something
+wrong in SakalMaster is fixed by editing a file and submitting again.
 
 ## What it will not do
 
 - **Invent structure.** A repo with less written down gets a smaller draft, and
   the gaps are named. You will not find epics in your tracker that exist nowhere
   in your repo.
+- **Keep a sync-state file.** There is no hidden bookkeeping to go stale — drift
+  is worked out by reading SakalMaster back, live, every time.
 - **Import a status.** Every acceptance criterion is born `open`, including ones
   your spec marks as done. A spec saying something is finished is a claim; the
   verifier decides what is actually built by resolving citations against real
@@ -41,6 +47,8 @@ Then, in your repo:
 - **Queue work for agents.** Tasks land not-agent-ready. You flip that switch.
 - **Delete anything.** A spec section that disappeared is reported, not removed —
   it may still be live work.
+- **Touch `.sakal/context.md`.** That file belongs to the desktop app. This
+  skill ignores it and says so.
 - **Ask for your API token in chat.** It belongs in your MCP config. If a skill
   ever asks you to paste a token into a conversation, refuse.
 

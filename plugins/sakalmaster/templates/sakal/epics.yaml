@@ -1,0 +1,6 @@
+# Outcomes worth shipping. Project-scoped. Membership is declared on the
+# stories, never listed here — one place for membership.
+epics:
+  - <XX-01> — <an outcome worth shipping>
+    outcome: <what must be true for this epic to be done>
+    source: docs/<file>.md

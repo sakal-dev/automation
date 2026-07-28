@@ -1,0 +1,3 @@
+# app key -> the repository that IS that app. One repo is one app.
+codebases:
+  - <app-key> — <github-owner>/<repo>

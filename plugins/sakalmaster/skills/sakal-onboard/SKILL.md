@@ -1,213 +1,179 @@
 ---
 name: sakal-onboard
-description: Get an existing project into SakalMaster. Reads the repo's own reality — specs, docs, README, open issues — drafts journeys, epics, stories, acceptance criteria and tasks, shows a dry run, and writes nothing until the human confirms. Re-runs converge instead of duplicating. Use when the user says "onboard this repo into SakalMaster", "/sakal-onboard", "import my project into SakalMaster", "set up SakalMaster for this codebase", or after specs change and the tracker needs to catch up.
+description: Get a project into SakalMaster in three phases over a committed `.sakal/` directory — PREPARE reads the repo and drafts structured files with provenance, VERIFY lints them until green, SUBMIT writes only verified files through the MCP. Re-runs converge; corrections are file edits. Use when the user says "onboard this repo into SakalMaster", "/sakal-onboard", "prepare the sakal directory", "verify my .sakal", "submit to SakalMaster", or after specs change and the tracker needs to catch up.
 ---
 
 # sakal-onboard
 
-Turns a repo into a tracked project in SakalMaster: journeys → epics → stories →
-acceptance criteria → tasks, extracted from what the repo already says.
-
-**Nobody re-types their own project.** The reading is the work; the human's job
-is to say yes or no to a draft.
-
-Two rules decide almost every judgement call in this skill:
-
-1. **Never invent structure.** A repo with less written down gets a smaller
-   draft, and the gaps are named. Padding a draft to look impressive is the one
-   unforgivable failure here — it puts fiction into the customer's tracker.
-2. **Nothing is written before the human says yes.** Not one row.
-
-## Before anything: three preconditions, in the customer's words
-
-Check all three, report all three, then stop if any is missing. Do not improvise
-around a missing one.
-
-| # | What must be true | How to check | If missing |
-|---|---|---|---|
-| 1 | The SakalMaster MCP is connected | call `sakal_list_projects` | walk them through the connect flow below |
-| 2 | A project exists | it appears in that list | they create it in the app — **Projects → New project** |
-| 3 | This repo is linked as a codebase (app) | its key appears under the project | they link it in the app — **App Management → the app → Repository** |
-
-**Connecting the MCP** (one time, and it is theirs — not yours):
-
-> In SakalMaster: profile menu → **API tokens** → *New token*, scope `read+write`.
-> It is shown exactly once. Then, in their terminal:
-> `claude mcp add sakalmaster -e SAKAL_TOKEN=<the token> -- node <path>/apps/mcp/dist/index.js`
-> (hosted projects also need `SAKAL_SUPABASE_URL` and
-> `SAKAL_SUPABASE_PUBLISHABLE_KEY` — both public values.)
-
-**Never ask for a token in the chat, and never accept one if it is offered.**
-It belongs in their MCP config, nowhere else. If they paste one anyway, tell
-them to revoke it and mint another.
-
-**No Claude Code?** This door is closed to them — say so plainly and point at
-the in-app import (onboarding way 2). Do not contort this skill into a
-copy-paste ritual.
-
-## Step 1 — Say where you are about to write, before you write
-
-Print the resolved target and get an explicit yes:
+Three phases over one committed directory:
 
 ```
-Project:     Sakal POS            (id 4a47bb51-…)
-Codebase:    sakalpos-garage      (app key: sakalpos-garage)
-Environment: staging              (https://…supabase.co)
-Repo:        sakal-dev/sakalpos-garage @ main
+PREPARE  read the repo → write .sakal/     (nothing leaves the machine)
+VERIFY   lint .sakal/ → file:line problems (nothing leaves the machine)
+SUBMIT   verified files → SakalMaster      (the only phase that writes)
 ```
 
-More than one project or app visible → **ask which**, never pick. Writing a
-customer's project into the wrong project is expensive to undo and worse to
-discover later.
+**Why files and not a conversation.** Once data is live it is expensive to
+correct and awkward to review. `.sakal/` is the draft while mistakes are still
+free: readable, diffable, editable, and checkable by a linter that says
+`file:line`. A chat transcript is none of those things.
 
-## Step 2 — Read the repo's reality
+`.sakal/` is **committed to the repo** by design. It is the project's
+spec-as-code seed and the working copy for every future correction — when
+something is wrong in SakalMaster, you fix the file and submit again.
 
-In priority order, stopping when the repo runs out of material:
+## The three rules
 
-1. **A spec set** — `docs/specs/`, `specs/`, `docs/product/`, or whatever the
-   repo actually uses. Look before assuming; ask if it is ambiguous.
-2. **README + docs/** — for a repo with no formal specs this is the source.
-3. **Open GitHub issues** — via `gh issue list`, if the repo has a remote.
-4. **The code's own shape** — module and route names tell you the app's
-   structure when prose does not.
+1. **No status anywhere in `.sakal/`.** Files carry inputs. Status is derived
+   server-side from citations and bugs. A `status:` field is a verify **error**,
+   not a warning — a spec's `[x]` is a claim, and importing it would defeat the
+   product on day one.
+2. **No sync-state file.** Drift is computed live by reading SakalMaster back at
+   verify and submit time. Nothing on disk can go stale and lie to you.
+3. **Templates live in this plugin.** The customer's directory contains only
+   their truth — never a leftover placeholder.
 
-Chunk large repos: read in passes and keep an explicit **unread list**. Report
-it. Silent truncation is a lie by omission — a customer who thinks you read
-everything will trust a draft built on a third of their project.
+## The tree
 
-### What maps to what
+```
+.sakal/
+  config.yaml                 scope, project, app, target host + project id
+  registry/personas.yaml      who it is for
+  registry/goals.yaml         what it is for
+  registry/modules.yaml       business capabilities (+ features)
+  registry/codebases.yaml     app key → github repo
+  journeys.yaml               end-to-end paths (goal, persona, source)
+  epics.yaml                  outcomes worth shipping (outcome, source)
+  stories/<EPIC>/<KEY>.md     one story: front-matter + sentence + ACs inline
+  decisions.md                choices made while drafting → decision records
+  findings.md                 welded evidence, claimed-done items, contradictions
+  _unread.md                  what could not be classified, honestly
+  tasks/  bugs/               only when the repo has issues (github_ref)
+  context.md                  the DESKTOP APP's file — ignored, never touched
+```
 
-| Repo material | SakalMaster | Key |
+Templates for every one of these ship in this plugin under
+`templates/sakal/`. Copy, fill, verify.
+
+## Scope: one project, many repos
+
+A project can span many codebases (one product, eleven repos). Ownership splits
+along that seam:
+
+| Layer | Owns | Lives |
 |---|---|---|
-| a user-facing outcome / journey doc | **journey** | `spec:<repo>:<id>` |
-| a spec file / feature area | **epic** | `spec:<repo>:<id>` |
-| a `### ID · Title` block, or a README feature | **story** | `spec:<repo>:<id>` |
-| a `- [ ] AC-n — …` line, or a stated requirement | **AC** | `AC-<n>` under its story |
-| an open issue | **task** (or **bug** if it describes a defect) | linked by `github:<owner>/<repo>#<n>` |
+| **project** | goals, personas, modules, journeys, **epics** | one repo's `.sakal/`, or the server |
+| **app** | stories, ACs, tasks, bugs | each codebase's own `.sakal/` |
 
-Stories need a **persona**, **app**, **epic**, **journey** and **module** to
-exist. Where the repo does not say, do not guess a persona into existence —
-see *Registry gaps* below.
+`config.yaml` says which layer this directory carries:
 
-## Step 3 — Dry run. Always. Every time.
+- `scope: project` — this repo owns the project layer. A single-repo project
+  uses this and carries **both** layers in one `.sakal/`.
+- `scope: app` — this repo carries only its own stories. The project layer
+  already exists on the server.
 
-Show, in this order:
+**Under `scope: app` you REFERENCE, you never re-draft.** Read the server's
+project layer first and use its keys. If a story genuinely needs a persona or
+epic that does not exist yet, do **not** quietly invent it — write it into
+`findings.md` and say so out loud, so a human decides whether the project layer
+should grow. Verify flags any project-layer file found in an app-scoped
+directory as a re-draft.
 
-1. **Counts**: journeys / epics / stories / ACs / tasks.
-2. **A representative sample** — one full branch from journey down to ACs, so
-   the human can see the shape rather than a number.
-3. **What could not be classified**, by name. A short "I could not place these
-   four documents" list is worth more than four invented epics.
-4. **Registry gaps** — personas, apps, modules the structure needs that do not
-   exist yet, and exactly where to create them.
-5. **Findings** — contradictions, duplicate ids, spec sections that assert
-   status.
+## PREPARE
 
-Then ask for confirmation. **Write nothing until you get it.**
+1. **Preconditions**, stated plainly, all three checked before anything else:
+   the SakalMaster MCP is connected (`sakal_list_projects` answers), a project
+   exists, and this repo is linked as a codebase. Missing one → point at the
+   exact place in the app. Never improvise around it, never ask for a token in
+   chat.
+2. **Print the target** — project, app, host, project id — and get a yes.
+3. **Read the repo's reality**, in this order: a spec set (`docs/specs/`,
+   `specs/`, whatever it actually uses — look, do not assume), then README and
+   `docs/`, then open issues via `gh`, then the code's own module and route
+   names. Chunk large repos and keep `_unread.md` honest; silent truncation is a
+   lie by omission.
+4. **Write `.sakal/`.** Every story and every AC carries `source:` pointing at
+   the local document that justifies it. Nothing without a source — if you
+   drafted something the repo does not say, mark it `source: none (drafted)` so
+   it is visible rather than smuggled.
+5. Put what you could not classify in `_unread.md`, what you had to decide in
+   `decisions.md`, and what you noticed in `findings.md`.
 
-> **Statuses never import.** A spec that says an item is done is making a claim,
-> not stating a fact. Every AC is born `open`; the verifier decides what is
-> actually built by resolving citations against real code. If a spec welds its
-> evidence into the AC text ("AC-3 — refund flow works, see refund_service.dart"),
-> import the text **as-is** and record it as a finding. Do not split it, do not
-> convert it into a citation, do not set a status. Someone chose those words;
-> the customer decides whether to change them.
+**Never invent structure.** A repo with less written down gets a smaller draft
+and the gaps get named. Padding a draft to look impressive puts fiction into a
+customer's tracker.
 
-### If the dry run is rejected twice
+### `prepare --from-server`
 
-Do not run a third identical sweep. Offer the granular path instead — one epic
-or one issue at a time — so they can steer rather than veto. Two rejections
-means the sweep's shape is wrong, and a third will be rejected too.
+For a project created in the app before any files existed. Reads what is live
+and materialises `.sakal/` from it, so an in-app-first customer joins the
+file-based world without re-drafting. Sources come back as
+`source: none (drafted)` — the server does not know which document justified a
+story, and pretending otherwise would fake provenance.
 
-## Step 4 — Submit
-
-Through the MCP tools, under the customer's own credential. Every row is
-attributed to them in History; RLS applies. **The onboarding path is the
-governed path** — there is no bulk side door, deliberately.
-
-Order matters, because each layer references the one above:
+## VERIFY
 
 ```
-registry (persona / app / module — only what was approved in the dry run)
-  → sakal_create_journey     key spec:<repo>:<id>
-  → sakal_create_epic        key spec:<repo>:<id>
-  → sakal_create_story       key spec:<repo>:<id>   (app, epic, journey, persona, module)
-  → sakal_create_ac          per story, born open
-  → sakal_create_task        githubRef: github:<owner>/<repo>#<n>
-  → sakal_link_github_issue  for anything created before its ref was known
+node <plugin>/lib/sakal-verify.mjs [--server server-state.json]
 ```
 
-Hard rules while submitting:
+Zero dependencies. Reports `file:line` with a fix for each problem, so a
+correction is an edit and not a conversation. **Green verify is a hard
+precondition for submit.**
 
-- **Tasks land NOT agent-ready.** `sakal_create_task` leaves them that way;
-  simply never call `sakal_set_task_agent_ready` during onboarding. Flipping
-  that switch is the operator's, later, deliberately.
-- **Never set a status** — no AC status, no citation `resolves`, no surface
-  status. The tools give you no way to; do not go looking for one.
-- **Report progress as you go**, in layers, so an interruption is legible.
+What it checks: front-matter parses · required fields per ENTITIES.md · key
+format and uniqueness · every reference resolves (story → epic, journey,
+persona, app, module; journey → goal, persona) · provenance present **and the
+cited section actually exists in the repo** · no status fields anywhere · AC
+kind present and known · scope rules · and drift in both directions when you
+pass `--server`.
 
-## Step 5 — Re-runs converge
+**Lintable vs judgment.** Lintable: vagueness ("properly", "various"),
+more-than-one-claim ACs, story-sentence shape, welded evidence, and everything
+above. Judgment, and no linter should pretend otherwise: whether an AC is the
+*right* AC, whether an epic is worth shipping, whether a journey is one a real
+person walks. Warnings are findings, not blockers.
 
-A second run is not a second import. Before creating anything, read what is
-already there (`sakal_project_summary`, `sakal_search_stories`,
-`sakal_list_tasks`) and match on the stable keys — `spec:<repo>:<id>` and
-`github:<owner>/<repo>#<n>`.
+**Welded evidence** — an AC with a file or symbol reference baked into its
+text — is a warning every run, by ruling. It is imported **as-is**: someone
+chose those words. It is recorded in `findings.md` so it stays visible, never
+silently rewritten into a citation.
 
-Report the second run as **deltas**: `12 unchanged · 3 new · 1 changed text ·
-2 in SakalMaster but no longer in the specs`.
+## SUBMIT
 
-Vanished spec sections are **reported, never deleted**. Something that left the
-spec may still be live work; that is the customer's call, not yours.
+1. Verify must be green. If it is not, stop; nothing has been sent anywhere.
+2. **Read SakalMaster back first**, and print the delta before writing.
+3. Create only what is missing. Keys are identity: `spec:<app>:<KEY>`.
+4. **Never clobber a newer in-app edit.** If the server holds something the
+   files do not, say so and ask — a human may have edited in the app. Submit
+   never deletes server-side records.
+5. ACs are born open. Tasks land **not** agent-ready — never call
+   `sakal_set_task_agent_ready` during onboarding; that switch is the
+   operator's.
 
-## Step 6 — Close
+### Correcting something
 
-- Offer the **verifier pass** — it is what turns the imported map into an honest
-  one, by resolving citations against real code.
-- Tell them what they will now see: their project's structure in the app, ACs
-  sitting `open` because nothing has been proven yet, and the Execution page's
-  **Ready** column filling as they flip tasks agent-ready.
-- Say plainly that the map is honest *because* it starts empty of claims.
+Edit the file → verify → submit again. That is the whole loop, and it is why the
+directory is committed. An interrupted submit needs no cleanup: re-run, and the
+keys converge.
 
 ## Unhappy paths
 
-**MCP not connected / wrong credential** → explain the connect flow above. Never
-ask for a token in chat. A `read`-scoped token fails on the first write with a
-database-level refusal, not a polite one — if writes are refused, check the
-token's scope first.
+**Hand-edited file breaks parse** → verify fails closed with the offending line
+quoted and what was expected instead.
 
-**Messy or contradictory sources** → draft less, and list what you could not
-classify. Two documents that contradict each other are a finding, not a merge
-problem for you to solve silently.
+**Provenance rot** — a doc section renamed or deleted after prepare → verify
+flags the stale source as an error. Repoint it, or mark it drafted.
 
-**Interrupted mid-submit** → nothing to clean up. Re-run; the keys converge and
-already-created rows are recognised, not duplicated. Say this out loud when it
-happens, because a half-finished import *looks* alarming.
+**Two spec items, one GitHub issue** → the database refuses the second link
+(`23505`). Surface it as a spec bug naming both candidates; never silently drop
+one.
 
-**Two spec items pointing at one GitHub issue** → the database refuses the
-second link (unique violation, `23505`). Surface it as a **spec bug**, naming
-both candidates, and let the customer decide which one owns the issue. Never
-silently drop one.
+**Registry gaps** → named, with where to create them. Under `scope: app` they go
+to `findings.md` for a human, because growing the project layer from inside one
+codebase is a decision, not a side effect.
 
-**Registry gaps** → name each missing persona / app / module and where to create
-it. You may create the ones the customer explicitly approved in the dry run —
-that is reviewed, not silent. You may not conjure a persona because a story
-needed one.
+**Huge repo** → chunk, and keep `_unread.md` truthful.
 
-**Wrong project or environment** → this is why step 1 exists. If the target
-looks wrong at any point, stop and re-confirm rather than continuing.
-
-**A huge repo** → chunk, and keep the unread list honest.
-
-## Day-after commands
-
-Onboarding is a sweep; day-to-day is increments. Add one thing at a time with
-the same machinery and the same rules (dry run, stable key, born open,
-not-agent-ready):
-
-- `/sakal-submit-epic <spec file>` — one epic and its stories
-- `/sakal-submit-issue <n>` — one GitHub issue as a task or bug
-- `/sakal-submit-story <id>` — one story and its ACs
-
-These are documented here as the intended path and are **not yet shipped as
-separate commands**; today, ask this skill for the increment ("add just
-GR-11 to SakalMaster") and it runs the same steps against that subset.
+**`context.md`** → the desktop app owns it. Verify ignores it and says so; the
+skill never writes to it.

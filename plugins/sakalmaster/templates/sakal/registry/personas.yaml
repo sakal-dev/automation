@@ -1,0 +1,3 @@
+# Who the product is for. Stories reference these keys.
+personas:
+  - <persona-key> — <Persona label>

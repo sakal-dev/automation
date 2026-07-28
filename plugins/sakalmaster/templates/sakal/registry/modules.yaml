@@ -1,0 +1,4 @@
+# Business capabilities, not codebases.
+modules:
+  - <module-key> — <capability name>
+    features: <what this capability covers, one line>
