@@ -1,0 +1,133 @@
+# =============================================================================
+# probe-app-token.yml — SKM-018's acceptance test, run from a real linked repo.
+#
+# TEMPORARY AND MANUAL. `workflow_dispatch` only: it cannot fire on its own, so
+# it does not violate the engine repo's inert-trigger rule. Delete it once the
+# facts below are recorded in docs/REVIEWER.md.
+#
+# It answers the four questions no amount of reading can settle:
+#   1. does the OIDC → github-app-token mint actually work from Actions?
+#   2. what does the minted token CARRY — permissions, repository scope, and
+#      when does it expire? (the reviewer's whole safety story is "pull_requests
+#      write, contents READ"; that claim needs to be read off the real token,
+#      not off the installation page)
+#   3. who does GitHub think is speaking when the token acts?
+#   4. what does the API really say in the failure cases the reviewer matches
+#      on — the exact wording, not a remembered approximation.
+#
+# It NEVER prints the token. Only its metadata.
+# =============================================================================
+name: probe-app-token
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Optional: a PR number in THIS repo to probe review-posting against (leave empty to skip)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      SAKAL_URL: https://yfsempkvvdglebtlkztn.supabase.co
+      ANON: sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj
+    steps:
+      - name: 1 · Mint an installation token through SakalMaster
+        id: mint
+        run: |
+          set -uo pipefail
+          OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r '.value // empty')
+          [ -n "$OIDC" ] || { echo "::error::could not mint an OIDC token"; exit 1; }
+          echo "OIDC subject: $(cut -d. -f2 <<<"$OIDC" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '"repo=\(.repository) ref=\(.ref) aud=\(.aud)"' 2>/dev/null || echo '(undecodable)')"
+
+          CODE=$(curl -sS -o /tmp/mint.json -w '%{http_code}' -X POST \
+            "$SAKAL_URL/functions/v1/github-app-token" \
+            -H "apikey: $ANON" -H "content-type: application/json" \
+            -d '{"oidc":"'"$OIDC"'","permissions":{"pull_requests":"write"}}')
+          echo "mint HTTP $CODE"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+          # Never print the token. Print everything ELSE, which is the point.
+          jq 'del(.token) | . + {token_present: (has("token")), token_prefix: ((.token // "")[0:5])}' /tmp/mint.json \
+            || { echo "non-JSON body:"; head -c 500 /tmp/mint.json; }
+
+          TOK=$(jq -r '.token // empty' /tmp/mint.json)
+          if [ -z "$TOK" ]; then
+            echo "::error::mint returned no token (HTTP $CODE) — SKM-018 is not satisfied"; exit 1
+          fi
+          echo "::add-mask::$TOK"
+          echo "tok=$TOK" >> "$GITHUB_OUTPUT"
+          echo "::notice::MINT OK (HTTP $CODE)"
+
+      - name: 2 · What does the token actually carry?
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.tok }}
+        run: |
+          set -uo pipefail
+          echo "── the installation this token belongs to ──"
+          gh api /installation/repositories --jq '{total: .total_count, repos: [.repositories[].full_name][0:8]}' 2>&1 | head -20
+          echo
+          echo "── can it READ this repo? (expected: yes) ──"
+          gh api "repos/$GITHUB_REPOSITORY" --jq '.full_name + " visibility=" + .visibility' 2>&1 | head -3
+          echo
+          echo "── can it WRITE code? (expected: NO — contents:read is the reviewer-cannot-merge guarantee) ──"
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/PROBE-SHOULD-FAIL.txt" \
+               -f message="probe: this must be refused" \
+               -f content="$(printf 'x' | base64)" 2>&1 | head -5; then
+            echo "::error::THE TOKEN CAN WRITE CONTENTS. The reviewer-cannot-merge guarantee is BROKEN — the App has been granted Contents: Write. Stop and revoke."
+            exit 1
+          else
+            echo "::notice::contents write REFUSED, as required"
+          fi
+
+      - name: 3 · Who is speaking?
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.tok }}
+        run: |
+          set -uo pipefail
+          # An installation token is not a user, so /user 403s. The identity that
+          # shows up on its writes is the App's bot. Read it from the App itself.
+          echo "── /app (the identity behind this token) ──"
+          gh api /app --jq '{slug, name, id}' 2>&1 | head -10 \
+            || echo "(GET /app needs a JWT, not an installation token — expected)"
+          echo
+          echo "── rate-limit resource tells us the credential class ──"
+          gh api /rate_limit --jq '.rate' 2>&1 | head -5
+
+      - name: 4 · Expiry — how long is this token good for?
+        run: |
+          set -uo pipefail
+          exp=$(jq -r '.expires_at // empty' /tmp/mint.json)
+          if [ -z "$exp" ]; then
+            echo "::warning::the mint response carries NO expires_at. GitHub installation tokens expire in 60 minutes regardless; the caller just cannot see when. Worth adding to the response."
+          else
+            now=$(date -u +%s)
+            e=$(date -u -d "$exp" +%s 2>/dev/null || echo 0)
+            echo "::notice::expires_at=$exp (in $(( (e - now) / 60 )) minutes)"
+          fi
+
+      - name: 5 · The real failure wording (only if a PR was given)
+        if: ${{ inputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ steps.mint.outputs.tok }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -uo pipefail
+          echo "── submitting a COMMENT review on #$PR as the App ──"
+          jq -nc --arg b "Probe from SKM-018's acceptance test: confirming the SakalMaster App can submit a review through the minted token. No verdict is implied by this comment." \
+            '{body:$b, event:"COMMENT"}' \
+          | gh api -X POST "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input - \
+              --jq '{id, state, user: .user.login, html_url}' 2>&1 | head -20
+          echo
+          echo "── and an APPROVE, to capture the exact wording either way ──"
+          jq -nc '{body:"Probe: APPROVE path wording check.", event:"APPROVE"}' \
+          | gh api -X POST "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --input - \
+              --jq '{id, state, user: .user.login}' 2>&1 | head -20
