@@ -194,6 +194,55 @@ the ones to look for:
 Until both land, run integrated repos with `reviewer_kind: github-actions` — the
 standalone reviewer is a real, independent reviewer, just not the App one.
 
+## The first live cycle — 2026-07-28, sakal-dev/sakalpos-garage#129
+
+Run end to end on a real PR in a real linked repo, then closed without merging
+and every temporary caller removed. What it proved, and what it broke:
+
+| # | Event | Head | Result |
+|---|---|---|---|
+| 1 | reviewer runs | `3b68f04` | **COMMENT** — caught a planted false claim and *verified it against source*, citing `RULES.md:93` and `98-99`. Cost **$0.274738** (measured) |
+| 2 | defect pushed | `1b0f067` | **CHANGES_REQUESTED** |
+| 3 | defect extended | `ef42a18` | **CHANGES_REQUESTED** |
+| 4 | rework round 2 | `98b5469` | coder appended a fix; `append-only (ahead) — thread anchors intact`; gate re-run **passed**; round marker `rounds=2` |
+| 5 | re-review | `1867f2e` | **APPROVED** |
+| 6 | merge gate | — | **HOLD** — 1 current approval, 0 change-requests, **3 unresolved threads** |
+
+Step 6 is the one worth dwelling on. The reviewer approved, and the gate still
+refused: docs-only waived CI and the approval, and the unresolved threads
+blocked anyway. That is the carve-out's limit behaving exactly as written —
+approve-with-comments is a comment, not consent.
+
+### Two defects the loop could not have survived, both found by running it
+
+**Every step in a closed agent loop is triggered by another bot**, and
+`claude-code-action` refuses bot-triggered runs unless `allowed_bots` names the
+trigger (its default is *no bots*). Two separate failures, one per direction:
+
+- the **rework** is triggered by the reviewer → *"non-human actor: sakal-master
+  (type: Bot)"* (run `30329768778`) → fixed in v2.6.2;
+- the **re-review** is triggered by the coder's push → *"non-human actor: claude
+  (type: Bot)"* (run `30330314097`) → fixed in v2.6.3.
+
+Miss either and the loop half-works in the most misleading way available: the
+first review lands and nothing after it ever does. Keep both allowlists tight —
+never `*`, because the rework prompt is assembled from the review's text, so a
+permissive list lets any App that can review the repo choose what the coder is
+told to do.
+
+**What did not go wrong, and mattered:** when the review model step died, submit
+refused to post — *"the reviewer produced no findings file; an empty review is
+not an approval."* A crashed reviewer did not silently approve a PR. The
+verdict-discipline guard earned its place on its first real failure.
+
+### One platform fact this settled
+
+A review by the **SakalMaster App** (installation token) **does** trigger
+workflows; a review by `github-actions[bot]` (GITHUB_TOKEN) does **not**
+(constraint #7). So the loop closes automatically only in **integrated** mode —
+in standalone mode the reviewer can post a verdict, but only a *human's*
+request-changes starts a rework. One more reason the App identity matters.
+
 ## The provider seam
 
 `actions/review-agent` speaks only JSON findings and the GitHub API. The model
