@@ -53,6 +53,24 @@ any repo in that org, including repos where agents write code. The path denylist
 keeps agents out of `.github/**`, but a denylist is a guardrail, not a boundary.
 Server-side custody makes the question moot.
 
+**Verified live, and better than expected** (garage run `30329385895`,
+2026-07-28): the mint returns a token **scoped to the calling repository only**,
+not to the installation. Read off the real token, not off a settings page:
+
+```
+mint HTTP 200
+permissions:  { contents: read, metadata: read, pull_requests: write }
+expires_at:   2026-07-28T05:40:21Z   (59 minutes)
+/installation/repositories → { "repos": ["sakal-dev/sakalpos-garage"], "total": 1 }
+contents write → 403 "Resource not accessible by integration"
+```
+
+So a leaked reviewer token is a one-repo, one-hour, cannot-write-code
+credential. The concentration risk below is about the App **private key** held
+by SakalMaster, not about anything a runner ever holds. A repo that is not
+linked gets a clean refusal — `403 "repository <owner/name> is not linked to a
+SakalMaster app"` (verified from `sakal-dev/automation`, run `30329324668`).
+
 ## Platform key concentration — recorded, not hidden
 
 Accepted deliberately, and written down here because a trust decision nobody
@@ -145,11 +163,21 @@ gh api orgs/<org>/installations \
   --jq '.installations[] | select(.app_slug=="sakal-master") | .permissions'
 ```
 
-## What SakalMaster still owes (the integrated path is not live)
+## The integrated path — LIVE as of 2026-07-28
 
-The standalone reviewer works today with nothing to configure. The **integrated**
-reviewer does not, and cannot until two things land — neither of which belongs
-in this repo:
+Both blockers cleared, both verified first-hand rather than taken on report:
+
+| Was blocking | State now | Evidence |
+|---|---|---|
+| `POST /functions/v1/github-app-token` did not exist (404) | **deployed** | `mint HTTP 200`, run `30329385895` |
+| installation granted `pull_requests: read` | **`pull_requests: write`**, `contents` still `read` | `gh api orgs/sakal-dev/installations` |
+
+The mint accepts **OIDC only** — no PAT fallback — so it cannot be exercised
+from a laptop, which is the correct shape: the credential is reachable only from
+a runner that GitHub itself vouched for.
+
+The historical record of what was owed, kept because the failure modes are still
+the ones to look for:
 
 1. **`POST /functions/v1/github-app-token`** — verified absent (`HTTP 404`,
    2026-07-27). Takes an OIDC proof plus a requested permission set, returns a
