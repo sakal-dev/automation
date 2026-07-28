@@ -1,0 +1,5 @@
+{
+  "name": "sakalmaster",
+  "version": "0.1.0",
+  "description": "Get your project into SakalMaster. /sakal-onboard reads your repo — specs, docs, README, issues — drafts journeys, epics, stories, acceptance criteria and tasks, shows you a dry run, and writes nothing until you say yes. Re-runnable: a second run converges instead of duplicating."
+}

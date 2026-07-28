@@ -8,6 +8,11 @@
       "name": "sakal-automation",
       "source": "./plugins/sakal-automation",
       "description": "Agent automation for sakal-dev / Thalias repos: install (onboard a repo in <30 min), operate (queue/unblock/upgrade/diagnose), dispatch (hand briefs to cloud executors). Implements the SOURCE → BRIEF → EXECUTE → GATE contract in docs/task-contract.md."
+    },
+    {
+      "name": "sakalmaster",
+      "source": "./plugins/sakalmaster",
+      "description": "Onboard a project into SakalMaster: /sakal-onboard turns a repo's specs, docs and issues into journeys, epics, stories, ACs and tasks — dry-run first, nothing written without confirmation, re-runs converge. Install this WITHOUT the agent-automation stack; the two plugins are independent."
     }
   ]
 }
