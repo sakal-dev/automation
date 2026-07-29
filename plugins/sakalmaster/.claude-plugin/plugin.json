@@ -1,5 +1,5 @@
 {
   "name": "sakalmaster",
-  "version": "0.4.0",
-  "description": "Get a project into SakalMaster from its own repo. /sakal-onboard-project prepares the project layer, /sakal-onboard-app prepares a codebase's stories, /sakal-verify is the hard gate, /sakal-submit sends only verified files. Everything lands in a committed .sakal/ directory you can read, edit and re-check before anything goes live."
+  "version": "0.5.0",
+  "description": "Get a project into SakalMaster from its own repo. PREPARE and VERIFY are fully OFFLINE — draft and lint a committed .sakal/ directory with no connection at all; SUBMIT is the only phase that touches the server. Includes CONVENTIONS.md, the house schema verify enforces mechanically."
 }

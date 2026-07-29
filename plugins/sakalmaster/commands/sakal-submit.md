@@ -25,12 +25,21 @@ Send verified `.sakal/` files to SakalMaster.
 and what is blocked, then ask. Choosing what to send is the user's, and a
 command that guesses is a command that surprises.
 
+0. **This is the only phase that needs the server.** No MCP tools → refuse in
+   plain words: *"Submit needs a connection to SakalMaster and there is none.
+   Connect the MCP (and restart Claude Code), then re-run. Your `.sakal/` files
+   are unaffected — nothing was sent."* Never a stack trace, never a silent skip.
 1. **Re-verify the scope first.** A green from ten minutes ago is not a green —
-   files change. Run the same verifier `/sakal-verify` runs:
-   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs --server <tmp> --json [--scope <sel>]`
+   files change. Run the same verifier `/sakal-verify` runs, locally:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs --json [--scope <sel>]`
    Any error in scope → refuse, show the first three, stop.
+1b. **Read SakalMaster back and check the declaration**, which prepare only
+   claimed: write the read-back to a temp file and run
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-plan.mjs --server <tmp> [--scope <sel>]`.
+   It refuses with a `config.yaml` message if the declared project or app does
+   not resolve — **before any write**.
 2. **Print the target** — project, app, host — before the first write.
-3. **Report readiness in plain words**, from the verifier's `readiness`:
+3. **Report readiness in plain words**, from the planner's output:
    - ready: everything it references already exists in SakalMaster
    - blocked: say what is missing and what to send first, e.g.
      *"GR-03-02 references epic GR-03, not in SakalMaster yet — submit

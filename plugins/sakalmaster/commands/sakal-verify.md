@@ -2,19 +2,18 @@
 description: The hard gate — lint .sakal/ and report problems in file:line words. Whole tree or a scope.
 ---
 
-## FIRST, before anything else
+## This phase is OFFLINE
 
-If the `sakal_*` MCP tools are not available in this session, print exactly this
-and stop:
+It reads the repo and writes files. It does **not** need the SakalMaster MCP and
+must never block on it. If the tools happen to be present you MAY read the
+server back and print the delta as enrichment; if they are absent, or the user
+denies the call, print one line and carry on:
 
-> **Restart Claude Code, then re-run this command.** The SakalMaster tools are
-> not registered in this session yet. (Plugin commands, MCP registration and the
-> tool registry after authentication each need a restart to appear.)
+> offline — server state unknown; delta will be shown at submit.
 
-Do not list paths, do not read `~/.claude.json`, do not run `python3 -c`, do not
-open config files. Check tool presence, and `claude mcp list` if you need more.
-A customer's first interaction should not be an approval dialog about this
-plugin's own internals.
+Never prompt for a connection, never retry, never fail. Target identity is a
+DECLARATION written into `.sakal/config.yaml` from the repo and what the user
+tells you; **submit** is where that claim is checked against the server.
 
 ## Then
 
@@ -22,19 +21,14 @@ Run the gate over `.sakal/`. **This is the same verifier `/sakal-submit` runs �
 there is exactly one implementation of these checks**, at
 `${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs`.
 
-1. If the MCP is connected, read the server back first and write it to a temp
-   file, so drift and readiness are live rather than remembered:
-   `sakal_search_stories`, plus the project layer (`sakal_project_summary` and
-   the registry reads) as `{stories:[…],epics:[…],journeys:[…],personas:[…],modules:[…],goals:[…]}`.
-2. Run:
-   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs [--server <tmp>] [--scope <sel>]`
-3. Show the output as it is. Do not summarise away a `file:line`; that is the
+1. Run the gate. It is strictly local — it never contacts SakalMaster:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs [--scope <sel>]`
+2. Show the output as it is. Do not summarise away a `file:line`; that is the
    part the user acts on.
 
 $ARGUMENTS is an optional scope — `stories/GR-03/`, `journeys.yaml`, one file.
 A selector that matches nothing → say so and list what IS selectable (the
-top-level entries of `.sakal/`). **Whole-tree drift is reported even when
-scoped**, so a narrow check never hides a wider divergence.
+top-level entries of `.sakal/`). Drift belongs to submit — verify lints files and says nothing about the server.
 
 **End by naming the next step**, always:
 

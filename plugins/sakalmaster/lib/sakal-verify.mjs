@@ -13,8 +13,10 @@
 // THE THREE RULES, enforced on the data and obeyed by this script:
 //   1. No status field anywhere in .sakal/ — files carry inputs; status is
 //      derived server-side. A `status:` key is an ERROR, not a warning.
-//   2. No sync-state file. Drift is computed LIVE from a server read-back the
-//      caller passes with --server; nothing on disk can go stale.
+//   2. No sync-state file, and NO SERVER MODE. This script is strictly LOCAL —
+//      it lints files and nothing else. Drift and submit-readiness need the
+//      server, so they belong to submit (lib/sakal-plan.mjs), which is the one
+//      phase allowed to touch it. Prepare and verify work on a plane.
 //   3. Templates live in the plugin. This script never writes to .sakal/.
 //
 // `context.md` is the desktop app's pre-existing artifact. It is IGNORED and
@@ -22,7 +24,7 @@
 //
 // Exit: 0 = green (submit allowed) · 1 = errors · 2 = bad invocation
 //
-//   node sakal-verify.mjs [--dir .sakal] [--repo-root .] [--server state.json] [--json]
+//   node sakal-verify.mjs [--dir .sakal] [--repo-root .] [--scope sel] [--json]
 // =============================================================================
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -31,8 +33,7 @@ const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
 const DIR = opt('--dir', '.sakal')
 const ROOT = opt('--repo-root', '.')
-const SERVER = opt('--server', null)
-const SCOPE = opt('--scope', null)   // limit reporting/readiness to a subtree or file
+const SCOPE = opt('--scope', null)   // limit reporting to a subtree or file
 const JSON_OUT = args.includes('--json')
 
 const problems = []
@@ -157,7 +158,8 @@ else {
   if (scope === 'app' && !cfg.app) err(`${DIR}/config.yaml`, cfg.scope?.line ?? 1, 'REQUIRED', '`app` is required when scope is app', 'it names which codebase these stories belong to')
 }
 
-// Project layer: local when scope=project, on the SERVER when scope=app.
+// Project layer: local when scope=project; when scope=app it lives on the
+// server and submit is what checks the references against it.
 const projectLayerLocal = scope !== 'app'
 const personas = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/personas.yaml'), 'personas') : new Map()
 const goals = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/goals.yaml'), 'goals') : new Map()
@@ -166,22 +168,11 @@ const codebases = parseCollection(join(dirAbs, 'registry/codebases.yaml'), 'code
 const journeys = projectLayerLocal ? parseCollection(join(dirAbs, 'journeys.yaml'), 'journeys') : new Map()
 const epics = projectLayerLocal ? parseCollection(join(dirAbs, 'epics.yaml'), 'epics') : new Map()
 
-// Rule 2: no sync-state file. Live state arrives from the caller.
-let server = null
-if (SERVER) {
-  try { server = JSON.parse(readFileSync(SERVER, 'utf8')) }
-  catch (e) { warn(SERVER, 1, 'SERVERREAD', `could not read the server state: ${e.message}`, 'drift cannot be reported without it') }
-}
-// REFERENCE, NEVER RE-DRAFT: under scope=app the project layer is the server's.
+// Under scope=app the project layer lives on the server, so its keys CANNOT be
+// resolved locally — and that is fine. A reference is a CLAIM; submit is where
+// claims are checked, against the real thing. Verify says so rather than
+// pretending it verified something it could not see.
 if (scope === 'app') {
-  if (!server) warn(`${DIR}/config.yaml`, 1, 'NOSERVER', 'scope is app, so the project layer lives on the server — pass --server to resolve its keys', 'without it, references to personas/journeys/epics cannot be checked')
-  else {
-    for (const k of server.personas ?? []) personas.set(k, { key: k, line: 0, fields: {} })
-    for (const k of server.goals ?? []) goals.set(k, { key: k, line: 0, fields: {} })
-    for (const k of server.modules ?? []) modules.set(k, { key: k, line: 0, fields: {} })
-    for (const k of server.journeys ?? []) journeys.set(k, { key: k, line: 0, fields: {} })
-    for (const k of server.epics ?? []) epics.set(k, { key: k, line: 0, fields: {} })
-  }
   // THE SEAM, ENFORCED (SKA-018 Part 2). An app-scoped directory may not DEFINE
   // a project-layer entity anywhere except proposals/, which submit never
   // sends. Definitions elsewhere are an ERROR, not a warning: a warning is
@@ -231,11 +222,12 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   for (const k of ['title', 'epic', 'persona', 'app', 'module'])
     if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on a story`, 'ENTITIES.md marks it required — the write is refused without it')
   const refCheck = (k, map, where) => { const v = fm[k]?.value; if (v && !map.has(v)) err(f, fm[k].line, 'REF', `${k} "${v}" is not declared`, `add it to ${where}`) }
-  const elsewhere = projectLayerLocal ? null : 'the project layer on the server (scope=app references, never re-drafts)'
-  refCheck('epic', epics, elsewhere ?? 'epics.yaml')
-  refCheck('journey', journeys, elsewhere ?? 'journeys.yaml')
-  refCheck('persona', personas, elsewhere ?? 'registry/personas.yaml')
-  refCheck('module', modules, elsewhere ?? 'registry/modules.yaml')
+  if (projectLayerLocal) {
+    refCheck('epic', epics, 'epics.yaml')
+    refCheck('journey', journeys, 'journeys.yaml')
+    refCheck('persona', personas, 'registry/personas.yaml')
+    refCheck('module', modules, 'registry/modules.yaml')
+  }
   refCheck('app', codebases, 'registry/codebases.yaml')
   if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
     err(f, fm.app.line, 'SCOPEAPP', `app "${fm.app.value}" is not this directory's app ("${cfg.app.value}")`, "an app-scoped .sakal/ carries only its own codebase's stories")
@@ -263,6 +255,7 @@ for (const p of walk(join(dirAbs, 'stories'))) {
       else if (!AC_KINDS.has(kind)) err(f, line, 'ACKIND', `${id} kind "${kind}" is not one of ${[...AC_KINDS].join(', ')}`, '')
       const v = VAGUE.find(w => new RegExp(`\\b${w}\\b`, 'i').test(text))
       if (v) warn(f, line, 'VAGUE', `${id} contains "${v}" — not independently checkable`, 'say what is observably true instead')
+      if (text.trim().split(/\s+/).length > 30) warn(f, line, 'CONV-ACLONG', `${id} is ${text.trim().split(/\s+/).length} words (house schema: 4–30)`, 'a paragraph is not a claim — see CONVENTIONS.md')
       if (text.split(/[.;]/).filter(s => s.trim()).length > 2) warn(f, line, 'ACLONG', `${id} looks like more than one claim`, 'one AC = one testable claim; split it')
       if (WELDED.test(text)) warn(f, line, 'WELDED', `${id} welds its evidence into the text`, 'imported AS-IS by ruling and recorded in findings.md — a citation is the right home for evidence')
       return
@@ -272,6 +265,11 @@ for (const p of walk(join(dirAbs, 'stories'))) {
     if (!raw.trim()) flush()
   })
   flush()
+  // CONVENTIONS.md granularity — warnings this release, by ruling: enforcing new
+  // conventions on trees drafted before they existed would turn working
+  // directories red overnight. Flip to errors once the fleet is normalised.
+  if (acs > 8) warn(f, fm.key.line, 'CONV-ACS', `story ${key} has ${acs} ACs (house schema: 1–8)`, 'usually means the story is doing two jobs — look, then split or keep deliberately')
+  if (!/^[A-Za-z]{2,}-\d{2}-\d{2}$/.test(key)) warn(f, fm.key.line, 'CONV-KEY', `story key "${key}" is not the house shape XX-nn-mm`, 'keys are identity and effectively permanent — see CONVENTIONS.md')
   if (acs === 0) err(f, fm.key.line, 'NOACS', `story ${key} has no acceptance criteria`, 'a story with no testable claim promises nothing')
 }
 
@@ -294,46 +292,17 @@ if (existsSync(proposalsDir)) {
   }
 }
 
+// CONVENTIONS.md: stories per epic. Counted after the whole tree is read.
+{
+  const perEpic = new Map()
+  for (const [, st] of stories) { const e = st.refs?.epic; if (e) perEpic.set(e, (perEpic.get(e) ?? 0) + 1) }
+  for (const [e, n] of perEpic) if (n > 12)
+    warn(`${DIR}/epics.yaml`, 1, 'CONV-EPIC', `epic ${e} has ${n} stories (house schema: 2–12)`, 'often means it is really a journey, or two epics — see CONVENTIONS.md')
+}
+
 // The guest we do not touch. Said out loud so nobody wonders if it was missed.
 if (existsSync(join(dirAbs, 'context.md')))
   problems.push({ sev: 'info', file: `${DIR}/context.md`, line: 1, code: 'IGNORED', msg: 'desktop artifact — ignored and untouched by design', fix: '' })
-
-// ── drift, live from the read-back (rule 2) ──────────────────────────────────
-let drift = null
-if (server) {
-  const ns = cfg.app?.value ?? cfg.project?.value
-  const want = new Set([...stories.keys()].map(k => `spec:${ns}:${k}`))
-  const have = new Set(server.stories ?? [])
-  drift = { onlyLocal: [...want].filter(k => !have.has(k)), onlyServer: [...have].filter(k => !want.has(k)), both: [...want].filter(k => have.has(k)) }
-}
-
-// ── submit readiness (one implementation, used by /sakal-submit) ────────────
-// A story is READY when everything it references already exists ON THE SERVER.
-// Anything else is BLOCKED, with the reason said the way a person would say it.
-let readiness = null
-if (server) {
-  const ns = cfg.app?.value ?? cfg.project?.value
-  const onServer = {
-    epic: new Set(server.epics ?? []), journey: new Set(server.journeys ?? []),
-    persona: new Set(server.personas ?? []), module: new Set(server.modules ?? []),
-    story: new Set(server.stories ?? []),
-  }
-  readiness = { ready: [], blocked: [], already: [] }
-  for (const [key, st] of stories) {
-    if (onServer.story.has(`spec:${ns}:${key}`)) { readiness.already.push({ key, file: st.file }); continue }
-    const missing = []
-    for (const [field, set] of [['epic', onServer.epic], ['journey', onServer.journey], ['persona', onServer.persona], ['module', onServer.module]]) {
-      const v = st.refs?.[field]
-      if (v && !set.has(v)) missing.push({ field, value: v })
-    }
-    if (missing.length) {
-      const m = missing[0]
-      readiness.blocked.push({ key, file: st.file,
-        why: `${key} references ${m.field} ${m.value}, which is not in SakalMaster yet — submit ${m.field === 'epic' ? 'epics.yaml' : m.field === 'journey' ? 'journeys.yaml' : `registry/${m.field}s.yaml`} first`,
-        missing })
-    } else readiness.ready.push({ key, file: st.file })
-  }
-}
 
 // ── report ───────────────────────────────────────────────────────────────────
 const inScope = p => !SCOPE || p.file.includes(SCOPE.replace(/^\.\//, '')) || p.file.endsWith('config.yaml')
@@ -345,7 +314,7 @@ const infos = scoped.filter(p => p.sev === 'info')
 if (JSON_OUT) {
   console.log(JSON.stringify({ ok: !errors.length, scope, scopeFilter: SCOPE,
     counts: { journeys: journeys.size, epics: epics.size, stories: stories.size },
-    problems: scoped, drift, readiness, proposals }, null, 2))
+    problems: scoped, proposals }, null, 2))
   process.exit(errors.length ? 1 : 0)
 }
 
@@ -356,23 +325,6 @@ for (const p of [...errors, ...warns, ...infos]) {
   console.log(`  ${tag} ${p.file}:${p.line}  [${p.code}] ${p.msg}`)
   if (p.fix) console.log(`         ↳ ${p.fix}`)
 }
-if (readiness) {
-  console.log(`\n  submit readiness${SCOPE ? ` (scope: ${SCOPE})` : ''}:`)
-  const inS = x => !SCOPE || x.file.includes(SCOPE.replace(/^\.\//, ''))
-  const r = readiness.ready.filter(inS), b = readiness.blocked.filter(inS), a = readiness.already.filter(inS)
-  console.log(`    ready: ${r.length}   blocked: ${b.length}   already in SakalMaster: ${a.length}`)
-  for (const x of r) console.log(`      ready    ${x.key}`)
-  for (const x of b) console.log(`      blocked  ${x.why}`)
-}
-if (drift) {
-  console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just the scope):`)
-  if (!drift.onlyLocal.length && !drift.onlyServer.length) console.log('    none — files and SakalMaster agree')
-  if (drift.onlyLocal.length) console.log(`    ${drift.onlyLocal.length} in files, NOT yet in SakalMaster: ${drift.onlyLocal.join(', ')}`)
-  if (drift.onlyServer.length) {
-    console.log(`    ${drift.onlyServer.length} in SakalMaster, NOT in files: ${drift.onlyServer.join(', ')}`)
-    console.log('      ↳ someone edited in-app, or a story left the files. Submit will NOT delete these.')
-  }
-} else console.log('\n  drift: not checked (no --server read-back supplied)')
 console.log()
 if (errors.length) {
   console.log(`\x1b[31m  VERIFY FAILED — ${errors.length} error(s), ${warns.length} warning(s). Submit is blocked.\x1b[0m`)

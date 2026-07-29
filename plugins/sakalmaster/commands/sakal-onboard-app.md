@@ -2,19 +2,18 @@
 description: PREPARE the APP layer (stories, ACs, tasks, bugs) for this codebase, referencing the project layer on the server.
 ---
 
-## FIRST, before anything else
+## This phase is OFFLINE
 
-If the `sakal_*` MCP tools are not available in this session, print exactly this
-and stop:
+It reads the repo and writes files. It does **not** need the SakalMaster MCP and
+must never block on it. If the tools happen to be present you MAY read the
+server back and print the delta as enrichment; if they are absent, or the user
+denies the call, print one line and carry on:
 
-> **Restart Claude Code, then re-run this command.** The SakalMaster tools are
-> not registered in this session yet. (Plugin commands, MCP registration and the
-> tool registry after authentication each need a restart to appear.)
+> offline — server state unknown; delta will be shown at submit.
 
-Do not list paths, do not read `~/.claude.json`, do not run `python3 -c`, do not
-open config files. Check tool presence, and `claude mcp list` if you need more.
-A customer's first interaction should not be an approval dialog about this
-plugin's own internals.
+Never prompt for a connection, never retry, never fail. Target identity is a
+DECLARATION written into `.sakal/config.yaml` from the repo and what the user
+tells you; **submit** is where that claim is checked against the server.
 
 ## Then
 
@@ -27,9 +26,11 @@ Prepare this repo'"'"'s **app layer** — `stories/<EPIC>/<KEY>.md`, plus
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-scope.mjs --declared app --apps <tmp>`
    - exit 1 → print the refusal as-is and stop. The usual cause is that this
      repo is not a linked codebase yet; the refusal says where to link it.
-   - exit 2 → the codebase list was not supplied. Fetch it; do not write blind.
-2. Print the target: project, app, host, project id.
-3. **Read the project layer from the SERVER and reference its keys.** Never
+   - exit 2 → the codebase list was not supplied (offline). Say so, write the
+     declaration anyway, and note that submit will check it.
+2. Print the DECLARED target: project, app, host. Say it is a declaration.
+3. **Reference the project layer by key — never re-draft it.** Offline you
+   cannot resolve those keys; that is fine, submit resolves them. Never
    re-draft a persona, goal, module, journey or epic here — verify treats a
    project-layer definition in an app tree as an error.
 4. Draft stories with provenance. A story needing a project-layer entity that

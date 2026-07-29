@@ -28,8 +28,10 @@ something is wrong in SakalMaster, you fix the file and submit again.
    server-side from citations and bugs. A `status:` field is a verify **error**,
    not a warning — a spec's `[x]` is a claim, and importing it would defeat the
    product on day one.
-2. **No sync-state file.** Drift is computed live by reading SakalMaster back at
-   verify and submit time. Nothing on disk can go stale and lie to you.
+2. **No sync-state file, and prepare/verify never touch the server.** Drift is
+   computed live at **submit**, which is the only phase that connects. Nothing
+   on disk can go stale, and drafting quality is never coupled to connectivity —
+   you can prepare and verify a dozen repos on a plane.
 3. **Templates live in this plugin.** The customer's directory contains only
    their truth — never a leftover placeholder.
 
@@ -72,21 +74,26 @@ along that seam:
 - `scope: app` — this repo carries only its own stories. The project layer
   already exists on the server.
 
-**Under `scope: app` you REFERENCE, you never re-draft.** Read the server's
-project layer first and use its keys. If a story genuinely needs a persona or
-epic that does not exist yet, do **not** quietly invent it — write it into
-`findings.md` and say so out loud, so a human decides whether the project layer
-should grow. Verify flags any project-layer file found in an app-scoped
-directory as a re-draft.
+**Under `scope: app` you REFERENCE, you never re-draft.** Use the project
+layer's keys. Offline you cannot resolve them and verify does not pretend to —
+a reference is a claim, and **submit** is where claims are checked against the
+real thing. If a story needs a persona or epic that does not exist yet, do not
+quietly invent it: put it in `.sakal/proposals/`, which verify acknowledges and
+submit never sends. Verify errors on any project-layer file DEFINED in an
+app-scoped tree.
 
 ## PREPARE
 
-1. **Preconditions**, stated plainly, all three checked before anything else:
-   the SakalMaster MCP is connected (`sakal_list_projects` answers), a project
-   exists, and this repo is linked as a codebase. Missing one → point at the
-   exact place in the app. Never improvise around it, never ask for a token in
-   chat.
-2. **Print the target** — project, app, host, project id — and get a yes.
+1. **No preconditions. PREPARE IS OFFLINE.** It reads the repo and writes files;
+   it does not need SakalMaster and must never block on it. If the MCP happens
+   to be connected you MAY read the server back and print the delta as
+   enrichment — and if the user denies that call, print
+   *"offline — server state unknown; delta will be shown at submit"* and carry
+   on. Never prompt for a connection.
+2. **Print the DECLARED target** — project, app, host — and say plainly that it
+   is a declaration. It is written into `config.yaml` from the repo and what the
+   user tells you; **submit** is where the claim is checked against the server,
+   and where it is refused with a `config.yaml` message if it does not resolve.
 3. **Read the repo's reality**, in this order: a spec set (`docs/specs/`,
    `specs/`, whatever it actually uses — look, do not assume), then README and
    `docs/`, then open issues via `gh`, then the code's own module and route
@@ -114,19 +121,25 @@ story, and pretending otherwise would fake provenance.
 ## VERIFY
 
 ```
-node <plugin>/lib/sakal-verify.mjs [--server server-state.json]
+node <plugin>/lib/sakal-verify.mjs [--scope <selector>]
 ```
 
-Zero dependencies. Reports `file:line` with a fix for each problem, so a
-correction is an edit and not a conversation. **Green verify is a hard
+Zero dependencies, and **strictly local — there is no server mode and no flag**.
+It lints files, which means it works on a plane. Reports `file:line` with a fix,
+so a correction is an edit and not a conversation. **Green verify is a hard
 precondition for submit.**
+
+The house schema in `CONVENTIONS.md` is enforced here mechanically — naming,
+granularity bounds, AC voice — as **warnings** in this release, so a fleet
+drafted before the conventions existed does not turn red overnight.
 
 What it checks: front-matter parses · required fields per ENTITIES.md · key
 format and uniqueness · every reference resolves (story → epic, journey,
 persona, app, module; journey → goal, persona) · provenance present **and the
 cited section actually exists in the repo** · no status fields anywhere · AC
-kind present and known · scope rules · and drift in both directions when you
-pass `--server`.
+kind present and known · scope rules · and the mechanical parts of CONVENTIONS.md.
+Drift and submit-readiness are **not** here: they need the server, so they
+belong to submit.
 
 **Lintable vs judgment.** Lintable: vagueness ("properly", "various"),
 more-than-one-claim ACs, story-sentence shape, welded evidence, and everything
@@ -141,8 +154,11 @@ silently rewritten into a citation.
 
 ## SUBMIT
 
-1. Verify must be green. If it is not, stop; nothing has been sent anywhere.
-2. **Read SakalMaster back first**, and print the delta before writing.
+0. **Submit is the only phase that touches the server.** No connection → refuse
+   in plain words; the files are unaffected.
+1. Verify must be green (run it again — a stale green is not a green).
+2. **Read SakalMaster back**, check the declared project/app actually resolves
+   (prepare only claimed it), and print the delta — all before writing.
 3. Create only what is missing. Keys are identity: `spec:<app>:<KEY>`.
 4. **Never clobber a newer in-app edit.** If the server holds something the
    files do not, say so and ask — a human may have edited in the app. Submit
