@@ -17,9 +17,10 @@ tells you; **submit** is where that claim is checked against the server.
 
 ## Then
 
-Prepare this repo'"'"'s **app layer** — `stories/<EPIC>/<KEY>.md`, plus
-`tasks/` and `bugs/` when the repo has issues — as `scope: app`.
-**Nothing is sent to SakalMaster.**
+Prepare this repo'"'"'s **app layer** as `scope: app`. **Nothing is sent to
+SakalMaster.** The emission itself is CODE (`lib/sakal-prepare.mjs`) so two
+runs are byte-identical; your work is the parts that need judgment: citations
+and the app profile.
 
 1. **Validate the declaration before writing anything.** Read the project'"'"'s
    codebases from the server into a temp file, then:
@@ -29,12 +30,35 @@ Prepare this repo'"'"'s **app layer** — `stories/<EPIC>/<KEY>.md`, plus
    - exit 2 → the codebase list was not supplied (offline). Say so, write the
      declaration anyway, and note that submit will check it.
 2. Print the DECLARED target: project, app, host. Say it is a declaration.
-3. **Reference the project layer by key — never re-draft it.** Offline you
-   cannot resolve those keys; that is fine, submit resolves them. Never
-   re-draft a persona, goal, module, journey or epic here — verify treats a
-   project-layer definition in an app tree as an error.
-4. Draft stories with provenance. A story needing a project-layer entity that
-   does not exist goes to `.sakal/proposals/` with a note — acknowledged by
+3. **Citation duty (the judgment part).** For each AC in the spec set, search
+   the checkout for honest evidence and write a cites JSON
+   (`{"<story-key>": {"<letter>": {"cite": [...], "reason": "..."}}}`):
+   - `enforced` = an exact-name DECLARATION in product code that enforces the
+     claim. `verified` = the exact innermost `test('…')` / `testWidgets('…')`
+     label — never a `group`. Both use the Q6 shape (kind/path/symbol[/note]).
+   - A checked spec checkbox is a **search hint only** — it never becomes a
+     citation by itself (S2).
+   - **No honest cite → `"cite": []` with a reason.** An honest gap beats a
+     false claim; the emitter re-greps every cite at the pin and DROPS what
+     does not confirm, so guessing only produces report noise.
+4. **App profile.** Write a profile JSON (`setup_cmd`, `verify_cmd`,
+   `denylist`, `evidence_format`, `conventions_files`) from the repo'"'"'s own
+   tooling (`tool/*.sh`, CLAUDE.md). It lands in `config.yaml` as the
+   `app_profile:` block; submit maps it to the SKM-034 apps columns.
+5. **Run the emitter** — it owns every byte that lands in `.sakal/`:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-prepare.mjs --cites <cites.json> --profile <profile.json>`
+   - It pins HEAD (one pin per run), emits `epics/<KEY>.md` (verbatim spec
+     sections, no status markers), `stories/<EPIC>/<KEY>.md` (fenced-yaml ACs,
+     VERBATIM text, raw non-default markers), `proposals/consumes-raw.yaml`,
+     and the findings.md status-voices block.
+   - **Exit 2 with "S1 loud-fail" → STOP and show the refusal verbatim.** The
+     spec family has AC-like lines the extractor does not parse; extracting
+     past them would silently drop ACs. That family belongs to SKA-026 —
+     never hand-extract around the refusal.
+   - Show the prepare report as-is: uncited ACs with reasons, dropped cites,
+     new/orphan stories, unresolvable-imported references.
+6. **Reference the project layer by key — never re-draft it.** New
+   project-layer needs go to `.sakal/proposals/` with a note — acknowledged by
    verify, never submitted, carried to the spec-home by a human.
 
 **End by naming the next step:**

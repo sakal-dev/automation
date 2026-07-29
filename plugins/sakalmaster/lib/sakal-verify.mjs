@@ -27,9 +27,15 @@
 //   node sakal-verify.mjs [--dir .sakal] [--repo-root .] [--scope sel] [--json]
 // =============================================================================
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
-import { join, relative } from 'node:path'
-// ONE reader, ONE slugger — shared with the writer. SKA-024's whole point.
-import { stripInlineComment, unquote, slug, anchorMatches } from './sakal-shared.mjs'
+import { join, relative, isAbsolute } from 'node:path'
+import { execFileSync } from 'node:child_process'
+// ONE reader, ONE slugger, ONE spec parser, ONE cite matcher — shared with the
+// writer. SKA-024's whole point, and what makes the P4 fidelity gate honest:
+// the checker parses the spec with the same function the emitter emitted from.
+import {
+  stripInlineComment, unquote, slug, anchorMatches, anchorMatchesText,
+  parseSourceURI, parseSpec, normWS, yamlUnquote, findDeclaration, findTestLabel,
+} from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
@@ -60,6 +66,16 @@ function parseKV(text, file, startLine = 1) {
     if (item) {
       if (!listKey) return err(file, line, 'PARSE', `list item with no key above it: "${raw.trim()}"`, 'a "- item" line must follow a "key:" line')
       out[listKey].value.push({ text: item[1].trim(), line }); return
+    }
+    // An indented `field: value` under an open `key:` is a one-level block —
+    // the shape `app_profile:` uses (SKA-025). Deeper nesting stays a refusal.
+    const nested = raw.match(/^\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/)
+    if (nested) {
+      if (!listKey) return err(file, line, 'PARSE', `"${nested[1]}:" is indented under nothing: "${raw.trim()}"`, 'an indented field needs an open "key:" line above it')
+      if (STATUS_KEYS.has(nested[1].toLowerCase())) return err(file, line, 'STATUSFIELD', `"${nested[1]}" is a status field and must not exist in .sakal/`, 'status is derived server-side')
+      out[listKey].fields ??= {}
+      out[listKey].fields[nested[1]] = { value: unquote(stripInlineComment(nested[2])), line }
+      return
     }
     const m = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/)
     if (!m) return err(file, line, 'PARSE', `not "key: value" and not a "- item": "${raw.trim()}"`, 'every line is `key: value` or an indented `- item`')
@@ -125,6 +141,78 @@ function checkSource(src, file, line, what) {
   }
 }
 
+// ── pinned sources and the P4 fidelity gate (SKA-025) ────────────────────────
+// A prepare-emitted source is `<owner>/<repo>:<path>#<anchor>@<short-sha>`.
+// Fidelity compares AC text and epic sections against the spec AT THE PIN,
+// through `git show <sha>:<path>` — NOT the working tree — so the gate is
+// identical before and after docs/specs/ is deleted (R1), and the pin is
+// load-bearing rather than decorative. Still strictly LOCAL: git objects live
+// in the repo; nothing here contacts a server.
+const showCache = new Map()
+function gitShow(sha, path) {
+  const k = `${sha}:${path}`
+  if (showCache.has(k)) return showCache.get(k)
+  let out = null
+  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:${path}`], { encoding: 'utf8' }) } catch { out = null }
+  showCache.set(k, out); return out
+}
+let originRepo = null
+try {
+  const m = execFileSync('git', ['-C', ROOT, 'remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim().match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/)
+  if (m) originRepo = m[1]
+} catch { /* not a git repo, or no origin — fallbacks below say so */ }
+
+// Resolve a pinned source to spec CONTENT, stating which plane it came from.
+function resolvePinned(uri, file, line, what) {
+  if (uri.sha) {
+    const c = gitShow(uri.sha, uri.path)
+    if (c != null) return { content: c, how: `@${uri.sha}` }
+    const wt = join(ROOT, uri.path)
+    if (existsSync(wt)) {
+      warn(file, line, 'PINMISS', `${what}: pin ${uri.sha} does not resolve in this repo's git — compared against the working tree instead`, 'a shallow clone or a rewritten history; re-run prepare to re-pin')
+      return { content: readFileSync(wt, 'utf8'), how: 'working tree (pin unresolvable)' }
+    }
+  } else {
+    const wt = join(ROOT, uri.path)
+    if (existsSync(wt)) {
+      problems.push({ sev: 'info', file, line, code: 'WTFALLBACK', msg: `${what}: source carries no pin — checked against the working tree`, fix: 'fine on a fresh tree; prepare adds the pin' })
+      return { content: readFileSync(wt, 'utf8'), how: 'working tree (no pin)' }
+    }
+  }
+  if (uri.repo && originRepo && uri.repo !== originRepo) {
+    problems.push({ sev: 'info', file, line, code: 'CROSSREPO', msg: `${what}: source lives in ${uri.repo}, not this repo — not resolvable here`, fix: 'submit checks cross-repo claims against the server' })
+    return { content: null }
+  }
+  err(file, line, 'SRCGONE', `${what}: source ${uri.path}${uri.sha ? `@${uri.sha}` : ''} resolves neither through git nor on disk`, 'the doc moved or the pin is wrong — re-run prepare, or repoint it')
+  return { content: null }
+}
+
+// The fenced-yaml AC block (Q6 shape): `- ac:` / `text:` / `cite:` entries.
+function parseFencedACs(body, bodyStart, file) {
+  const acs = []; let inYaml = false, sawFence = false, ac = null, cite = null
+  body.forEach((raw, i) => {
+    const line = bodyStart + i
+    if (/^```yaml\s*$/.test(raw)) { inYaml = true; sawFence = true; return }
+    if (/^```\s*$/.test(raw)) { inYaml = false; ac = null; cite = null; return }
+    if (!inYaml) return
+    if (!raw.trim() || raw.trim().startsWith('#')) return
+    let m
+    if ((m = raw.match(/^-\s+ac:\s*(\S+)\s*$/))) { ac = { id: m[1], line, text: null, cites: [], citeOpen: false }; acs.push(ac); cite = null; return }
+    if (!ac) return err(file, line, 'PARSE', `line belongs to no \`- ac:\` entry: "${raw.trim()}"`, 'the yaml block is a list of `- ac:` entries')
+    if ((m = raw.match(/^\s+marker:\s*(.*)$/))) { ac.marker = yamlUnquote(m[1]); ac.markerLine = line; return }
+    if ((m = raw.match(/^\s+text:\s*(.*)$/))) { ac.text = yamlUnquote(m[1]); ac.textLine = line; return }
+    if ((m = raw.match(/^\s+cite:\s*\[\s*\]\s*$/))) { ac.citeOpen = false; return }
+    if ((m = raw.match(/^\s+cite:\s*$/))) { ac.citeOpen = true; return }
+    if ((m = raw.match(/^\s+-\s+kind:\s*(\S+)\s*$/))) {
+      if (!ac.citeOpen) err(file, line, 'PARSE', 'a cite entry outside an open `cite:` list', 'write `cite:` on its own line, then `- kind: …`')
+      cite = { kind: m[1], line }; ac.cites.push(cite); return
+    }
+    if (cite && (m = raw.match(/^\s+(path|symbol|sha|note):\s*(.*)$/))) { cite[m[1]] = yamlUnquote(m[2]); return }
+    err(file, line, 'PARSE', `unrecognised line in the AC block: "${raw.trim()}"`, 'expected `- ac:` · `marker:` · `text:` · `cite:` (or `cite: []`) · `- kind:` · path/symbol/sha/note')
+  })
+  return { acs, sawFence }
+}
+
 // ── content rules that are genuinely checkable ───────────────────────────────
 // LINTABLE (below): vagueness, one-claim-per-AC, story sentence shape, key
 // format, reference resolution, provenance, welded evidence, status fields.
@@ -139,7 +227,7 @@ const WELDED = /(\.(dart|ts|tsx|js|py|go|rb|kt|swift|sql)\b|::|`[^`]+\.[a-z]{2,4
 const AC_KINDS = new Set(['behaviour', 'constraint', 'data', 'ux', 'security', 'performance'])
 
 // ── load ─────────────────────────────────────────────────────────────────────
-const dirAbs = join(ROOT, DIR)
+const dirAbs = isAbsolute(DIR) ? DIR : join(ROOT, DIR)
 if (!existsSync(dirAbs)) { console.error(`${DIR}/ does not exist. Run the prepare phase first.`); process.exit(2) }
 
 const cfgPath = join(dirAbs, 'config.yaml')
@@ -200,6 +288,63 @@ if (projectLayerLocal) {
   for (const [key, e] of epics) checkSource(e.fields.source?.value, `${DIR}/epics.yaml`, e.fields.source?.line ?? e.line, `epic ${key}`)
 }
 
+// ── epic docs: .sakal/epics/<KEY>.md (SKA-025, Addendum A1 item 1) ──────────
+// The app-side epic layer: verbatim spec sections behind a pinned source.
+// Distinct from project-layer `epics.yaml`, which stays forbidden under
+// scope=app — these files IMPORT this repo's own spec, they define nothing.
+const epicDocs = new Map()
+{
+  const dir = join(dirAbs, 'epics')
+  if (existsSync(dir)) for (const name of readdirSync(dir).filter(n => n.endsWith('.md')).sort()) {
+    const p = join(dir, name), f = rel(p)
+    const lines = readFileSync(p, 'utf8').split('\n')
+    if (lines[0].trim() !== '---') { err(f, 1, 'NOFM', 'file does not start with a `---` front-matter block', 'the first line must be exactly `---`'); continue }
+    const end = lines.indexOf('---', 1)
+    if (end < 0) { err(f, 1, 'NOFM', 'front-matter is never closed with `---`', 'add a closing `---`'); continue }
+    const fm = parseKV(lines.slice(1, end).join('\n'), f, 2)
+    const key = fm.key?.value
+    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
+    if (name !== `${key}.md`) err(f, fm.key.line, 'KEYFMT', `file is ${name} but key is "${key}"`, 'epic docs are named <KEY>.md')
+    for (const k of ['title', 'app', 'tier', 'priority'])
+      if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on an epic doc`, 'prepare writes it from the spec header')
+    if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
+      err(f, fm.app.line, 'SCOPEAPP', `app "${fm.app.value}" is not this directory's app ("${cfg.app.value}")`, "an app-scoped .sakal/ carries only its own codebase's epic docs")
+    epicDocs.set(key, f)
+
+    const body = lines.slice(end + 1), bodyStart = end + 2
+    // The status header was the proven liar (E5). Never imported, ever.
+    body.forEach((raw, i) => {
+      if (/🔴|🟢|🟡|\*\*Status:\*\*|\[x\]/.test(raw))
+        err(f, bodyStart + i, 'STATUSMARK', 'a status marker survived the import', 'status is derived — prepare never copies the `Status:` line or 🔴/🟢; delete it')
+    })
+    const own = parseSpec(body.join('\n'))
+    if (own.stories.length || body.some(l => /^##\s+Stories\s*$/.test(l)))
+      err(f, bodyStart, 'PROJECTDEF', 'an epic doc must not carry a Stories section', 'stories live in stories/<EPIC>/<KEY>.md — the epic doc holds only the spec sections')
+
+    // P4 fidelity: every section verbatim (normalised whitespace only) against
+    // the spec AT THE PIN. Works identically after docs/specs/ is deleted (R1).
+    const srcVal = fm.source?.value
+    if (!srcVal) { err(f, fm.key.line, 'NOSRC', `epic ${key} has no \`source:\``, 'prepare pins it: <owner>/<repo>:<path>@<short-sha>'); continue }
+    const uri = parseSourceURI(srcVal)
+    const r = resolvePinned(uri, f, fm.source.line, `epic ${key}`)
+    if (!r.content) continue
+    const spec = parseSpec(r.content)
+    const specSections = new Map(spec.sections.map(s => [normWS(s.heading), s]))
+    const ownHeadings = new Set()
+    for (const s of own.sections) {
+      ownHeadings.add(normWS(s.heading))
+      const want = specSections.get(normWS(s.heading))
+      if (!want) { err(f, bodyStart, 'FIDELITY', `section "## ${s.heading}" is not in the spec ${r.how}`, 'epic docs import spec sections verbatim — nothing may be added'); continue }
+      if (normWS(s.body) !== normWS(want.body))
+        err(f, bodyStart, 'FIDELITY', `section "## ${s.heading}" differs from the spec ${r.how}`, 'verbatim means verbatim — normalised whitespace is the only forgiveness; re-run prepare')
+    }
+    for (const [h, s] of specSections)
+      if (!ownHeadings.has(h)) err(f, bodyStart, 'FIDELITY', `spec section "## ${s.heading}" ${r.how} is missing from this epic doc`, 'prepare imports every non-Stories section; re-run it')
+    if (fm.title?.value && spec.title && normWS(fm.title.value) !== normWS(spec.title))
+      warn(f, fm.title.line, 'FIDELITY', `title differs from the spec H1 ("${spec.title}")`, 'titles are authored from the heading; drift is worth a look')
+  }
+}
+
 // ── stories ──────────────────────────────────────────────────────────────────
 const stories = new Map()
 function walk(d) {
@@ -235,40 +380,126 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   if (codebases.size) refCheck('app', codebases, 'registry/codebases.yaml')
   if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
     err(f, fm.app.line, 'SCOPEAPP', `app "${fm.app.value}" is not this directory's app ("${cfg.app.value}")`, "an app-scoped .sakal/ carries only its own codebase's stories")
-  checkSource(fm.source?.value, f, fm.source?.line ?? fm.key.line, `story ${key}`)
+  if (scope === 'app' && epicDocs.size && fm.epic?.value && !epicDocs.has(fm.epic.value))
+    err(f, fm.epic.line, 'REF', `epic "${fm.epic.value}" has no epic doc`, `prepare emits epics/${fm.epic.value}.md alongside the stories — structure must converge`)
 
+  const isNewFmt = body.some(l => /^```yaml\s*$/.test(l.trim()))
   const hIdx = body.findIndex(l => l.startsWith('## '))
   const sentence = body.slice(0, hIdx < 0 ? body.length : hIdx).join(' ').trim()
-  if (!sentence) err(f, bodyStart, 'NOSENTENCE', `story ${key} has no story sentence`, 'one line of "As a … I want … so that …" between the front-matter and the ACs')
-  else if (!/as a .+i want .+so that/i.test(sentence))
+  // S3 (A2): a re-extracted story whose spec family has no As/I-want/So-that
+  // triple carries an EMPTY story field by design — prepare never fabricates
+  // a voice. That is a WARNING naming the human work, not an error.
+  if (!sentence) {
+    if (isNewFmt) warn(f, bodyStart, 'NOSENTENCE', `story ${key} has no story sentence — the spec offered no triple and prepare does not fabricate one (S3)`, 'a human should voice this story; edit the file and re-verify')
+    else err(f, bodyStart, 'NOSENTENCE', `story ${key} has no story sentence`, 'one line of "As a … I want … so that …" between the front-matter and the ACs')
+  }
+  else if (!/as an? .+i want .+so that|as the .+i want .+so that/i.test(sentence))
     warn(f, bodyStart, 'STORYSHAPE', 'story sentence is not "As a … I want … so that …"', 'the shape is what makes the persona and the motive explicit')
 
-  let acs = 0; const seen = new Set(); let current = null
-  const flush = () => { if (current && !current.src) checkSource(null, f, current.line, current.id); current = null }
-  body.forEach((raw, i) => {
-    const line = bodyStart + i
-    const m = raw.match(/^-\s+(AC-\S+)\s*(?:\[([a-z]+)\])?\s*—\s*(.*)$/)
-    if (m) {
-      flush()
-      const [, id, kind, text] = m
-      acs++; current = { id, line }
-      if (!/^AC-\d{1,2}$/.test(id)) err(f, line, 'KEYFMT', `AC id "${id}" should look like AC-01`, '')
-      if (seen.has(id)) err(f, line, 'DUPKEY', `${id} appears twice in this story`, '')
-      seen.add(id)
-      if (!kind) err(f, line, 'ACKIND', `${id} has no kind`, `write "- ${id} [behaviour] — …"; one of: ${[...AC_KINDS].join(', ')}`)
-      else if (!AC_KINDS.has(kind)) err(f, line, 'ACKIND', `${id} kind "${kind}" is not one of ${[...AC_KINDS].join(', ')}`, '')
-      const v = VAGUE.find(w => new RegExp(`\\b${w}\\b`, 'i').test(text))
-      if (v) warn(f, line, 'VAGUE', `${id} contains "${v}" — not independently checkable`, 'say what is observably true instead')
-      if (text.trim().split(/\s+/).length > 30) warn(f, line, 'CONV-ACLONG', `${id} is ${text.trim().split(/\s+/).length} words (house schema: 4–30)`, 'a paragraph is not a claim — see CONVENTIONS.md')
-      if (text.split(/[.;]/).filter(s => s.trim()).length > 2) warn(f, line, 'ACLONG', `${id} looks like more than one claim`, 'one AC = one testable claim; split it')
-      if (WELDED.test(text)) warn(f, line, 'WELDED', `${id} welds its evidence into the text`, 'imported AS-IS by ruling and recorded in findings.md — a citation is the right home for evidence')
-      return
+  // Two body formats. NEW (SKA-025 re-extract): fenced-yaml ACs, sha-pinned
+  // source, VERBATIM imported text — the house voice lints do NOT run on the
+  // AC text (fidelity wins for imports; conventions govern what prepare
+  // authors: the sentence, the titles). LEGACY: inline `- AC-01 [kind] — …`,
+  // linted exactly as before.
+  const isNew = isNewFmt
+  let acs = 0
+  if (isNew) {
+    for (const k of ['tags', 'out_of_scope'])
+      if (!fm[k]) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on a re-extracted story`, 'tags come from the spec Priority line; an empty out_of_scope is written out loud: `out_of_scope: []`')
+    const srcVal = fm.source?.value
+    const uri = srcVal && !/^none\b/i.test(srcVal) ? parseSourceURI(srcVal) : null
+    if (!uri) checkSource(srcVal, f, fm.source?.line ?? fm.key.line, `story ${key}`)
+
+    const { acs: list, sawFence } = parseFencedACs(body, bodyStart, f)
+    acs = list.length
+    const seen = new Set()
+    const keyEsc = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    list.forEach((ac, i) => {
+      const wantId = `${key}-${String.fromCharCode(97 + i)}`
+      if (!new RegExp(`^${keyEsc}-[a-z]$`).test(ac.id)) err(f, ac.line, 'KEYFMT', `AC id "${ac.id}" should be ${key}-<letter>`, 'ids are <story-key>-<letter>, letters in spec order')
+      else if (ac.id !== wantId) err(f, ac.line, 'KEYFMT', `AC ids follow spec order — expected ${wantId} here, found ${ac.id}`, 'letters are positional: `a` is the spec section\'s first AC')
+      if (seen.has(ac.id)) err(f, ac.line, 'DUPKEY', `${ac.id} appears twice in this story`, '')
+      seen.add(ac.id)
+      if (ac.text == null || ac.text === '') err(f, ac.line, 'REQUIRED', `${ac.id} has no text`, 'text is the spec AC VERBATIM, double-quoted')
+      for (const c of ac.cites) {
+        if (c.kind !== 'enforced' && c.kind !== 'verified') { err(f, c.line, 'CITEKIND', `${ac.id} cite kind "${c.kind}" is not enforced|verified`, 'citation_kind, exactly (Q6)'); continue }
+        for (const req of ['path', 'symbol', 'sha']) if (!c[req]) err(f, c.line, 'REQUIRED', `${ac.id} cite has no \`${req}\``, 'Q6 shape: kind, path, symbol, sha, optional note')
+        if (!c.path || !c.symbol) continue
+        // Re-confirm the grep, through the pin — a cite is a claim, and an
+        // unconfirmable claim looks exactly like evidence.
+        let content = c.sha ? gitShow(c.sha, c.path) : null
+        if (content == null && existsSync(join(ROOT, c.path))) {
+          if (c.sha) warn(f, c.line, 'PINMISS', `${ac.id} cite pin ${c.sha} does not resolve — checked the working tree instead`, 're-run prepare to re-pin')
+          content = readFileSync(join(ROOT, c.path), 'utf8')
+        }
+        if (content == null) { err(f, c.line, 'CITEGONE', `${ac.id} cites ${c.path}, which resolves neither at ${c.sha ?? '(no sha)'} nor on disk`, 'prepare drops what it cannot re-confirm; so does verify'); continue }
+        const hit = c.kind === 'enforced' ? findDeclaration(content, c.symbol) : findTestLabel(content, c.symbol)
+        if (!hit) err(f, c.line, 'CITEGONE', `${ac.id}: no ${c.kind === 'enforced' ? `declaration of "${c.symbol}"` : `test label "${c.symbol}"`} greps in ${c.path}`, 'enforced = exact-name declaration; verified = exact innermost test(…) label — never group')
+      }
+    })
+    if (!sawFence) err(f, bodyStart, 'NOACS', `story ${key} has no fenced yaml AC block`, 'ACs live under `## Acceptance criteria` in a ```yaml fence')
+
+    // P4 FIDELITY: AC text verbatim against the spec AT THE PIN (git show,
+    // not the working tree — R1), normalised whitespace only.
+    if (uri?.path) {
+      const r = resolvePinned(uri, f, fm.source.line, `story ${key}`)
+      if (r.content) {
+        if (uri.anchor) {
+          const am = anchorMatchesText(r.content, uri.anchor)
+          if (!am.hit) err(f, fm.source.line, 'SRCANCHOR', `source resolves ${r.how} but has no section starting "#${uri.anchor}"`, `headings found: ${am.known.slice(0, 4).join(', ') || '(none)'}…`)
+          else if (am.duplicate) warn(f, fm.source.line, 'SRCDUP', `"#${uri.anchor}" matches more than one heading in ${uri.path}`, 'disambiguate the heading or the anchor')
+        }
+        const st = parseSpec(r.content).stories.find(s => s.key === key)
+        if (!st) err(f, fm.source.line, 'FIDELITY', `story ${key} has no section in ${uri.path} ${r.how}`, 'the spec moved on, or the key changed — re-run prepare')
+        else {
+          if (st.acs.length !== acs) err(f, bodyStart, 'FIDELITY', `story ${key} carries ${acs} ACs but the spec section ${r.how} has ${st.acs.length}`, 'the yaml block mirrors the spec AC-for-AC, in order — re-run prepare')
+          list.forEach((ac, i) => {
+            const sp = st.acs[i]
+            if (!sp) return
+            if (ac.text != null && normWS(ac.text) !== normWS(sp.text))
+              err(f, ac.textLine ?? ac.line, 'FIDELITY', `${ac.id} text is not the spec's AC-${sp.n} verbatim ${r.how}`, `the spec says: "${sp.text.length > 90 ? sp.text.slice(0, 90) + '…' : sp.text}" — imports are never improved, not even for a lint`)
+            // S2 (A2): the raw marker is recorded, never interpreted. A
+            // non-default spec marker must be captured; a captured marker
+            // must match the spec's — either way nothing is ever read INTO it.
+            if (ac.marker != null && normWS(ac.marker) !== normWS(sp.marker ?? '[ ]'))
+              err(f, ac.markerLine ?? ac.line, 'FIDELITY', `${ac.id} marker ${JSON.stringify(ac.marker)} is not the spec's raw marker ${JSON.stringify(sp.marker)} ${r.how}`, 'markers are captured verbatim and never interpreted (S2)')
+            else if (ac.marker == null && sp.marker && sp.marker !== '[ ]')
+              err(f, ac.line, 'FIDELITY', `${ac.id} drops the spec's raw marker ${JSON.stringify(sp.marker)} ${r.how}`, 'a non-default checkbox marker is data someone wrote — carried as `marker:`, never interpreted (S2)')
+          })
+          if (fm.title?.value && normWS(fm.title.value) !== normWS(st.title))
+            warn(f, fm.title.line, 'FIDELITY', `title differs from the spec heading ("${st.title}")`, 'titles are authored from the heading; drift is worth a look')
+        }
+      }
     }
-    const s = raw.match(/^\s+source:\s*(.*)$/)
-    if (s && current) { checkSource(s[1].trim(), f, line, current.id); current.src = true; return }
-    if (!raw.trim()) flush()
-  })
-  flush()
+  } else {
+    checkSource(fm.source?.value, f, fm.source?.line ?? fm.key.line, `story ${key}`)
+    const seen = new Set(); let current = null
+    const flush = () => { if (current && !current.src) checkSource(null, f, current.line, current.id); current = null }
+    body.forEach((raw, i) => {
+      const line = bodyStart + i
+      const m = raw.match(/^-\s+(AC-\S+)\s*(?:\[([a-z]+)\])?\s*—\s*(.*)$/)
+      if (m) {
+        flush()
+        const [, id, kind, text] = m
+        acs++; current = { id, line }
+        if (!/^AC-\d{1,2}$/.test(id)) err(f, line, 'KEYFMT', `AC id "${id}" should look like AC-01`, '')
+        if (seen.has(id)) err(f, line, 'DUPKEY', `${id} appears twice in this story`, '')
+        seen.add(id)
+        if (!kind) err(f, line, 'ACKIND', `${id} has no kind`, `write "- ${id} [behaviour] — …"; one of: ${[...AC_KINDS].join(', ')}`)
+        else if (!AC_KINDS.has(kind)) err(f, line, 'ACKIND', `${id} kind "${kind}" is not one of ${[...AC_KINDS].join(', ')}`, '')
+        const v = VAGUE.find(w => new RegExp(`\\b${w}\\b`, 'i').test(text))
+        if (v) warn(f, line, 'VAGUE', `${id} contains "${v}" — not independently checkable`, 'say what is observably true instead')
+        if (text.trim().split(/\s+/).length > 30) warn(f, line, 'CONV-ACLONG', `${id} is ${text.trim().split(/\s+/).length} words (house schema: 4–30)`, 'a paragraph is not a claim — see CONVENTIONS.md')
+        if (text.split(/[.;]/).filter(s => s.trim()).length > 2) warn(f, line, 'ACLONG', `${id} looks like more than one claim`, 'one AC = one testable claim; split it')
+        if (WELDED.test(text)) warn(f, line, 'WELDED', `${id} welds its evidence into the text`, 'imported AS-IS by ruling and recorded in findings.md — a citation is the right home for evidence')
+        return
+      }
+      const s = raw.match(/^\s+source:\s*(.*)$/)
+      if (s && current) { checkSource(s[1].trim(), f, line, current.id); current.src = true; return }
+      if (!raw.trim()) flush()
+    })
+    flush()
+  }
   // CONVENTIONS.md granularity — warnings this release, by ruling: enforcing new
   // conventions on trees drafted before they existed would turn working
   // directories red overnight. Flip to errors once the fleet is normalised.
@@ -317,12 +548,12 @@ const infos = scoped.filter(p => p.sev === 'info')
 
 if (JSON_OUT) {
   console.log(JSON.stringify({ ok: !errors.length, scope, scopeFilter: SCOPE,
-    counts: { journeys: journeys.size, epics: epics.size, stories: stories.size },
+    counts: { journeys: journeys.size, epics: epics.size, epicDocs: epicDocs.size, stories: stories.size },
     problems: scoped, proposals }, null, 2))
   process.exit(errors.length ? 1 : 0)
 }
 
-console.log(`\n  .sakal/ — scope: ${scope} · ${journeys.size} journeys · ${epics.size} epics · ${stories.size} stories`)
+console.log(`\n  .sakal/ — scope: ${scope} · ${journeys.size} journeys · ${epics.size || epicDocs.size} epics · ${stories.size} stories`)
 console.log(`  target: ${cfg.project?.value ?? '?'}${cfg.app ? ` / ${cfg.app.value}` : ''} @ ${cfg.target_host?.value ?? '?'}\n`)
 for (const p of [...errors, ...warns, ...infos]) {
   const tag = p.sev === 'error' ? '\x1b[31merror\x1b[0m' : p.sev === 'warn' ? '\x1b[33mwarn \x1b[0m' : '\x1b[36minfo \x1b[0m'

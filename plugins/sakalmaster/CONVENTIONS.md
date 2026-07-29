@@ -94,6 +94,23 @@ Every story and every AC carries `source:`.
 - A source pointing at a document that no longer exists is an **error**, not a
   warning: it looks like evidence and is not.
 
+## Imported vs authored — the precedence rule (SKA-025, ruled)
+
+A re-extracted tree carries two kinds of text, and two different laws apply:
+
+- **Imports** — AC `text`, raw `marker` fields, epic sections. **Fidelity
+  wins.** They are the spec VERBATIM (normalised whitespace only), pinned to a
+  sha, and the verify fidelity gate holds them to it. The house voice rules
+  (vague words, length, welded evidence) do **not** run on imported AC text — a
+  verbatim AC is never "improved" to satisfy a lint, or the two gates deadlock.
+  Welded evidence inside imported text is the spec author's choice; it belongs
+  in findings, not in an edit.
+- **Authored** — the story sentence, titles, keys, everything prepare writes in
+  its own voice. **Conventions govern.** The story-sentence grammar, key
+  shapes, and granularity bounds above apply in full. A spec family with no
+  story triple gets an EMPTY story field and a warning naming the human work —
+  prepare never fabricates a voice (fabrication is worse than absence).
+
 ## What is NOT in scope for a convention
 
 Whether an AC is the *right* AC. Whether an epic is worth shipping. Whether a

@@ -31,7 +31,9 @@ const walk = d => readdirSync(d, { withFileTypes: true }).flatMap(e =>
 
 // What a person may point at. `proposals/` is deliberately absent: it is never
 // submitted from here, so offering it as a selector would be a lie.
-const SUBMITTABLE = ['registry', 'journeys.yaml', 'epics.yaml', 'stories', 'tasks', 'bugs', 'decisions.md']
+// `epics` is the SKA-025 app-side epic-doc layer (epics/<KEY>.md) — submittable
+// like the stories it anchors. `epics.yaml` stays the project-layer file.
+const SUBMITTABLE = ['registry', 'journeys.yaml', 'epics.yaml', 'epics', 'stories', 'tasks', 'bugs', 'decisions.md']
 const NEVER = new Set(['proposals', 'context.md', '_unread.md', 'findings.md', 'config.yaml'])
 
 function selectable() {

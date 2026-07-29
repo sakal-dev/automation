@@ -110,6 +110,15 @@ app-scoped tree.
 and the gaps get named. Padding a draft to look impressive puts fiction into a
 customer's tracker.
 
+**The app-layer emission is code, not prose** (`lib/sakal-prepare.mjs`, since
+0.6.0): it pins HEAD, imports spec text VERBATIM (epic sections, AC text, raw
+checkbox markers), grep-confirms every citation at the pin, and is
+byte-deterministic. It REFUSES LOUDLY (S1) when a spec file carries AC-like
+lines its family rules do not parse — never hand-extract around that refusal;
+zero-AC extraction from an AC-bearing file must stay impossible. The model's
+share of prepare is judgment: the cites JSON (honest evidence or `[]` with a
+reason) and the app profile.
+
 ### `prepare --from-server`
 
 For a project created in the app before any files existed. Reads what is live

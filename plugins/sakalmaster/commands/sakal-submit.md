@@ -48,8 +48,17 @@ command that guesses is a command that surprises.
    what is missing, never duplicate, never delete. ACs are born open; tasks land
    **not** agent-ready.
 5. **Never submit `proposals/`.** They are carried to the spec-home by a human,
-   deliberately.
+   deliberately. (`proposals/consumes-raw.yaml` is promote-time material —
+   mapping raw Consumes/Journeys lines to real keys is a human'"'"'s call.)
 6. **Always report whole-tree drift**, even for a scoped submit.
+7. **App profile → `sakal_update_app`.** When `config.yaml` carries an
+   `app_profile:` block, map it onto the SKM-034 apps columns (`setup_cmd`,
+   `verify_cmd`, `denylist`, `evidence_format`, `conventions_files`; the
+   comma-separated fields become arrays) via `sakal_update_app` — and
+   **degrade gracefully when the server predates SKM-034**: an unknown-field
+   refusal means print exactly *"profile held back; server predates SKM-034"*
+   and submit everything else. There is no ordering dependency between the
+   two dispatches; never fail the whole submit over the profile.
 
 **Selectors are resolved by code, not by reading this carefully.** Always run:
 
