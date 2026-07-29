@@ -28,6 +28,8 @@
 // =============================================================================
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
+// ONE reader, ONE slugger — shared with the writer. SKA-024's whole point.
+import { stripInlineComment, unquote, slug, anchorMatches } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
@@ -64,8 +66,9 @@ function parseKV(text, file, startLine = 1) {
     const [, k, v] = m
     if (STATUS_KEYS.has(k.toLowerCase())) err(file, line, 'STATUSFIELD', `"${k}" is a status field and must not exist in .sakal/`, 'status is derived server-side from citations and bugs — files carry inputs only')
     if (k in out) err(file, line, 'DUPKEY', `"${k}" is set twice`, `first was line ${out[k].line}`)
-    if (v === '') { listKey = k; out[k] = { value: [], line, list: true } }
-    else { listKey = null; out[k] = { value: v.trim(), line } }
+    const clean = stripInlineComment(v)
+    if (clean === '') { listKey = k; out[k] = { value: [], line, list: true } }
+    else { listKey = null; out[k] = { value: unquote(clean), line } }
   })
   return out
 }
@@ -90,13 +93,13 @@ function parseCollection(path, collection) {
       if (!seenHeader) err(f, line, 'COLLECTION', `entry before the "${collection}:" header`, `start the file with "${collection}:"`)
       if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(key)) err(f, line, 'KEYFMT', `key "${key}" has characters that will not survive as a key`, 'letters, digits, dot, dash, slash, underscore')
       if (entries.has(key)) err(f, line, 'DUPKEY', `"${key}" is declared twice`, 'keys are identity — one declaration each')
-      current = { key, label, line, fields: {} }; entries.set(key, current); return
+      current = { key, label: stripInlineComment(label), line, fields: {} }; entries.set(key, current); return
     }
     const sub = raw.match(/^\s+([A-Za-z_]+)\s*:\s*(.*)$/)
     if (sub) {
       if (!current) return err(f, line, 'PARSE', `"${sub[1]}:" does not belong to any entry`, 'indented fields follow a "- key — label" line')
       if (STATUS_KEYS.has(sub[1].toLowerCase())) return err(f, line, 'STATUSFIELD', `"${sub[1]}" is a status field and must not exist in .sakal/`, 'status is derived server-side')
-      current.fields[sub[1]] = { value: sub[2].trim(), line }; return
+      current.fields[sub[1]] = { value: unquote(stripInlineComment(sub[2])), line }; return
     }
     err(f, line, 'PARSE', `unrecognised line: "${raw.trim()}"`, 'expected "- key — label" or an indented "field: value"')
   })
@@ -106,14 +109,6 @@ function parseCollection(path, collection) {
 // ── provenance ───────────────────────────────────────────────────────────────
 // A source pointing at a doc that was renamed is worse than no source: it looks
 // like evidence. Checked against the real repo, every run.
-const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-const anchorCache = new Map()
-function anchorsOf(file) {
-  if (anchorCache.has(file)) return anchorCache.get(file)
-  const set = new Set()
-  try { for (const l of readFileSync(file, 'utf8').split('\n')) { const m = l.match(/^#{1,6}\s+(.*)$/); if (m) set.add(slug(m[1])) } } catch {}
-  anchorCache.set(file, set); return set
-}
 function checkSource(src, file, line, what) {
   if (!src) return err(file, line, 'NOSRC', `${what} has no \`source:\``, 'add `source: docs/<file>#<anchor>`, or `source: none (drafted)` to say so out loud')
   if (/^none\b/i.test(src)) return warn(file, line, 'DRAFTED', `${what} is drafted with no document behind it`, 'fine if deliberate — listed so nobody mistakes it for something the repo said')
@@ -121,12 +116,12 @@ function checkSource(src, file, line, what) {
   const abs = join(ROOT, path.trim())
   if (!existsSync(abs)) return err(file, line, 'SRCGONE', `source file does not exist: ${path.trim()}`, 'the doc moved or was deleted — repoint it, or mark it `none (drafted)`')
   if (anchor) {
-    // Prefix match: real headings are long ("BK-01-01 · Save a link from the
-    // share sheet"), and an exact-slug rule would break every source the first
-    // time someone improves a title. A section that has genuinely gone still fails.
-    const want = slug(anchor)
-    if (![...anchorsOf(abs)].some(a => a === want || a.startsWith(want)))
-      return err(file, line, 'SRCANCHOR', `source file exists but has no section starting "#${anchor}"`, `headings found: ${[...anchorsOf(abs)].slice(0, 4).join(', ') || '(none)'}…`)
+    // Both sides go through the SAME slugger, which is what lets anchors written
+    // by an older prepare still match. Prefix match, because real headings are
+    // long and improving a title should not break its source.
+    const { hit, duplicate, known } = anchorMatches(abs, anchor)
+    if (!hit) return err(file, line, 'SRCANCHOR', `source file exists but has no section starting "#${anchor}"`, `headings found: ${known.slice(0, 4).join(', ') || '(none)'}…`)
+    if (duplicate) warn(file, line, 'SRCDUP', `"#${anchor}" matches more than one heading in ${path.trim()}`, 'the matcher will not silently pick one — disambiguate the heading or the anchor')
   }
 }
 
@@ -161,10 +156,19 @@ else {
 // Project layer: local when scope=project; when scope=app it lives on the
 // server and submit is what checks the references against it.
 const projectLayerLocal = scope !== 'app'
+const projectLayerLocalPre = projectLayerLocal
 const personas = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/personas.yaml'), 'personas') : new Map()
 const goals = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/goals.yaml'), 'goals') : new Map()
 const modules = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/modules.yaml'), 'modules') : new Map()
-const codebases = parseCollection(join(dirAbs, 'registry/codebases.yaml'), 'codebases')
+// registry/codebases.yaml is PROJECT-layer. Under scope: app the project layer
+// lives on the server and this repo's identity is config.yaml's declaration,
+// checked at submit (SKA-023's doctrine). Requiring the file here contradicted
+// it and failed a healthy tree.
+const codebases = projectLayerLocalPre
+  ? parseCollection(join(dirAbs, 'registry/codebases.yaml'), 'codebases')
+  : (existsSync(join(dirAbs, 'registry/codebases.yaml'))
+      ? parseCollection(join(dirAbs, 'registry/codebases.yaml'), 'codebases')
+      : new Map())
 const journeys = projectLayerLocal ? parseCollection(join(dirAbs, 'journeys.yaml'), 'journeys') : new Map()
 const epics = projectLayerLocal ? parseCollection(join(dirAbs, 'epics.yaml'), 'epics') : new Map()
 
@@ -228,7 +232,7 @@ for (const p of walk(join(dirAbs, 'stories'))) {
     refCheck('persona', personas, 'registry/personas.yaml')
     refCheck('module', modules, 'registry/modules.yaml')
   }
-  refCheck('app', codebases, 'registry/codebases.yaml')
+  if (codebases.size) refCheck('app', codebases, 'registry/codebases.yaml')
   if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
     err(f, fm.app.line, 'SCOPEAPP', `app "${fm.app.value}" is not this directory's app ("${cfg.app.value}")`, "an app-scoped .sakal/ carries only its own codebase's stories")
   checkSource(fm.source?.value, f, fm.source?.line ?? fm.key.line, `story ${key}`)

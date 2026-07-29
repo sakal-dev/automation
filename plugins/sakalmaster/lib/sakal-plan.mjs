@@ -13,6 +13,8 @@
 // =============================================================================
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
+// The SAME reader verify uses. A second config parser is how SKA-024 happened.
+import { readScalars, stripInlineComment } from './sakal-shared.mjs'
 const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
 const DIR = opt('--dir', '.sakal'), SCOPE = opt('--scope', null), JSON_OUT = args.includes('--json')
@@ -20,14 +22,16 @@ const SERVER = opt('--server', null)
 if (!SERVER || !existsSync(SERVER)) { console.error('--server <state.json> is required (submit reads SakalMaster back first)'); process.exit(2) }
 const server = JSON.parse(readFileSync(SERVER, 'utf8'))
 const cfgText = existsSync(join(DIR, 'config.yaml')) ? readFileSync(join(DIR, 'config.yaml'), 'utf8') : ''
-const cfg = k => (cfgText.match(new RegExp(`^${k}:\\s*(\\S+)`, 'm')) || [])[1]
+const scalars = readScalars(cfgText)
+const cfg = k => scalars[k]?.value
 const ns = cfg('app') ?? cfg('project')
 
 const walk = d => existsSync(d) ? readdirSync(d, { withFileTypes: true }).flatMap(e =>
   e.isDirectory() ? walk(join(d, e.name)) : (e.name.endsWith('.md') ? [join(d, e.name)] : [])) : []
 const stories = []
 for (const p of walk(join(DIR, 'stories'))) {
-  const t = readFileSync(p, 'utf8'), g = k => (t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')) || [])[1]?.trim()
+  const t = readFileSync(p, 'utf8')
+  const g = k => { const m = t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')); return m ? stripInlineComment(m[1]) : undefined }
   stories.push({ file: relative(DIR, p), key: g('key'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module') })
 }
 const on = { epic: new Set(server.epics ?? []), journey: new Set(server.journeys ?? []),
