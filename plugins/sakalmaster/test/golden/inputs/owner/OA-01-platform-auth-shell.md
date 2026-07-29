@@ -21,7 +21,7 @@ is consistent across surfaces.
 **So that** it's consistent with pos-flutter but doesn't drag in the offline engine
 
 **Acceptance criteria**
-- [ ] AC-1 — `lib/app/` structure per README §2: `core/`, `data/{models,providers,repositories,stores,services}`, `modules/*`, `middleware/`, `routes/`, `theme/`, `components/`
+- [ ] AC-1 — `lib/app/` structure per `docs/ARCHITECTURE.md`: `core/`, `data/{models,providers,repositories,stores,services}`, `modules/*`, `middleware/`, `routes/`, `theme/`, `components/`
 - [ ] AC-2 — Dependencies: `get`, `dio` (or GetConnect), `firebase_messaging` + `firebase_core`, `flutter_secure_storage`, `local_auth`, `get_storage`, `intl`, a charts lib (`fl_chart`); **no Drift**
 - [ ] AC-3 — GetX routing with initial route resolved by auth state (logged-out → login; logged-in → dashboard)
 - [ ] AC-4 — Theme + EN/KM i18n reuse the pos-flutter approach (brand colours, Kantumruy Pro for Khmer)

@@ -6,6 +6,7 @@
 import {
   slug, stripInlineComment, unquote, parseSourceURI, normWS, yamlQuote,
   yamlUnquote, wrap, acLetter, parseSpec, findDeclaration, findTestLabel,
+  expandConventionIncludes, denylistFromRules, consumesOf,
 } from './sakal-shared.mjs'
 let pass = 0, fail = 0
 const eq = (got, want, label) => {
@@ -114,6 +115,42 @@ console.log('\n── findDeclaration()/findTestLabel(): honest, never clever')
 
 console.log('\n── normWS(): the ONLY forgiveness fidelity grants')
 eq(normWS('  a\n b\tc  '), 'a b c', 'runs collapse, edges trim')
+
+console.log('\n── B2: @-include expansion — explicit, deterministic, cycle-safe')
+{
+  const fs = {
+    'CLAUDE.md': 'intro\n@docs/RULES.md\nmore\n@docs/CHANGELOG-RECENT.md\n',
+    'docs/RULES.md': '# rules\n@CLAUDE.md\n',   // cycle
+    'docs/CHANGELOG-RECENT.md': 'log',
+    'docs/ARCHITECTURE.md': 'arch',
+  }
+  const r = expandConventionIncludes(p => fs[p] ?? null, ['CLAUDE.md', 'docs/ARCHITECTURE.md'])
+  eq(r.files.join(', '), 'CLAUDE.md, docs/RULES.md, docs/CHANGELOG-RECENT.md, docs/ARCHITECTURE.md', 'each file before its includes; cycle does not loop; first-seen wins')
+  eq(r.missing.length, 0, 'nothing missing')
+  eq(expandConventionIncludes(p => fs[p] ?? null, ['nope.md']).missing.join(','), 'nope.md', 'a file absent from the record is reported, not silently kept')
+}
+
+console.log('\n── B3: denylist derived from the RULES denylist section, verbatim')
+{
+  const rules = [
+    '## 4. Scope & safety', 'stuff with `not-this`', '',
+    '## 5. Hard path denylist (structural, not a judgment call)', '',
+    'Never create, modify, or delete: `.github/**`, `tool/**`, any Gradle file',
+    '(`**/*.gradle`, `**/*.gradle.kts`, `gradle/**`, `**/gradle-wrapper.*`), any',
+    'keystore/signing material (`**/*.keystore`, `**/*.jks`, `**/key.properties`),',
+    'or `.env*`. If an issue needs any of these, escalate per §2.', '',
+    '## 6. Issue process rules', '`also-not-this`',
+  ].join('\n')
+  eq(denylistFromRules(rules).join(' '), '.github/** tool/** **/*.gradle **/*.gradle.kts gradle/** **/gradle-wrapper.* **/*.keystore **/*.jks **/key.properties .env*', 'the owner §5 shape: every backticked glob, in order, section-bounded')
+  eq(denylistFromRules('# no denylist section\n`x`').length, 0, 'no denylist heading → nothing derived')
+}
+
+console.log('\n── A3.1: the consumes slot, filtered and joined verbatim')
+{
+  const extras = ['**Consumes:** GR-02 (vehicle), P07', '**Implementation synced:** 2026-07-21 · Legend: ✅', '**Journeys:** 1, 14']
+  eq(consumesOf(extras), '**Consumes:** GR-02 (vehicle), P07 · **Journeys:** 1, 14', 'slot keys carried, audit metadata excluded')
+  eq(consumesOf(['**Last updated:** 2026-06-11']), '', 'non-slot extras yield nothing')
+}
 
 console.log(`\n${fail ? 'FAILED' : 'OK'} — ${pass} passed, ${fail} failed\n`)
 process.exit(fail ? 1 : 0)

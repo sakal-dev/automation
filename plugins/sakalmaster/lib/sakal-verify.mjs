@@ -34,7 +34,8 @@ import { execFileSync } from 'node:child_process'
 // the checker parses the spec with the same function the emitter emitted from.
 import {
   stripInlineComment, unquote, slug, anchorMatches, anchorMatchesText,
-  parseSourceURI, parseSpec, FAMILIES, normWS, yamlUnquote, findDeclaration, findTestLabel,
+  parseSourceURI, parseSpec, FAMILIES, consumesOf, normWS, yamlUnquote,
+  findDeclaration, findTestLabel,
 } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
@@ -353,6 +354,17 @@ const epicDocs = new Map()
       else if (specVal != null && fm[k]?.value && normWS(fm[k].value) !== normWS(specVal))
         err(f, fm[k].line, 'FIDELITY', `\`${k}\` differs from the spec ${r.how} ("${specVal}")`, 'values are verbatim, qualifiers included')
     }
+    // A3.1: the consumes-slot line, verbatim — after R1 deletion this
+    // frontmatter is the traceability's ONLY home; dropping it silently
+    // drops what D-02 called the entire epic→P-spec traceability.
+    {
+      const specConsumes = consumesOf(spec.headerExtrasRaw)
+      const fmC = fm.consumes_raw?.value ?? ''
+      if (specConsumes && !fmC) err(f, fm.key.line, 'FIDELITY', `the spec ${r.how} carries a consumes-slot line this epic doc drops`, `add \`consumes_raw: ${specConsumes.slice(0, 60)}…\` — or re-run prepare (A3.1)`)
+      else if (!specConsumes && fmC) err(f, fm.consumes_raw.line, 'FIDELITY', `\`consumes_raw\` is not in the spec ${r.how} — an epic doc invents nothing`, 're-run prepare')
+      else if (specConsumes && fmC && normWS(fmC) !== normWS(specConsumes))
+        err(f, fm.consumes_raw.line, 'FIDELITY', `\`consumes_raw\` differs from the spec ${r.how}`, `the spec says: "${specConsumes.length > 90 ? specConsumes.slice(0, 90) + '…' : specConsumes}" — key AND value verbatim, never normalized`)
+    }
     const specSections = new Map(spec.sections.map(s => [normWS(s.heading), s]))
     const ownHeadings = new Set()
     for (const s of own.sections) {
@@ -503,6 +515,13 @@ for (const p of walk(join(dirAbs, 'stories'))) {
           })
           if (fm.title?.value && normWS(fm.title.value) !== normWS(st.title))
             warn(f, fm.title.line, 'FIDELITY', `title differs from the spec heading ("${st.title}")`, 'titles are authored from the heading; drift is worth a look')
+          // A3.1, story level: per-story consumes-slot lines, verbatim.
+          const stConsumes = consumesOf(st.extrasRaw ?? [])
+          const fmC = fm.consumes_raw?.value ?? ''
+          if (stConsumes && !fmC) err(f, fm.key.line, 'FIDELITY', `the spec section ${r.how} carries a consumes-slot line this story drops`, 're-run prepare (A3.1)')
+          else if (!stConsumes && fmC) err(f, fm.consumes_raw.line, 'FIDELITY', `\`consumes_raw\` is not in the spec section ${r.how}`, 're-run prepare')
+          else if (stConsumes && fmC && normWS(fmC) !== normWS(stConsumes))
+            err(f, fm.consumes_raw.line, 'FIDELITY', `\`consumes_raw\` differs from the spec section ${r.how}`, 'key AND value verbatim, never normalized')
         }
       }
     }
@@ -539,8 +558,16 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   // conventions on trees drafted before they existed would turn working
   // directories red overnight. Flip to errors once the fleet is normalised.
   if (acs > 8) warn(f, fm.key.line, 'CONV-ACS', `story ${key} has ${acs} ACs (house schema: 1–8)`, 'usually means the story is doing two jobs — look, then split or keep deliberately')
-  if (!/^[A-Za-z]{2,}-\d{2}-\d{2}$/.test(key)) warn(f, fm.key.line, 'CONV-KEY', `story key "${key}" is not the house shape XX-nn-mm`, 'keys are identity and effectively permanent — see CONVENTIONS.md')
-  if (acs === 0) err(f, fm.key.line, 'NOACS', `story ${key} has no acceptance criteria`, 'a story with no testable claim promises nothing')
+  if (!/^[A-Za-z]{2,}-\d{2}[A-Za-z]?-\d{2}$/.test(key)) warn(f, fm.key.line, 'CONV-KEY', `story key "${key}" is not the house shape XX-nn-mm`, 'keys are identity and effectively permanent — see CONVENTIONS.md')
+  // SKA-027 ruling: in an IMPORTED (source-pinned) tree an AC-less story is
+  // honest state — the spec has not defined its ACs yet. It submits as a
+  // story, is never agent-ready, and its brief must say "no ACs — define
+  // them first". A hand-authored tree keeps this as an error: there, no ACs
+  // means nobody wrote the promise.
+  if (acs === 0) {
+    if (isNew) warn(f, fm.key.line, 'NOACS', `story ${key} has no acceptance criteria — imported as-is; the spec defines none yet`, 'honest state, not an error: never agent-ready until ACs exist; define them first')
+    else err(f, fm.key.line, 'NOACS', `story ${key} has no acceptance criteria`, 'a story with no testable claim promises nothing')
+  }
 }
 
 // proposals/ — new project-layer entities an app repo discovered. Acknowledged

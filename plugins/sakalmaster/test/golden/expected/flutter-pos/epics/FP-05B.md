@@ -3,6 +3,7 @@ key: FP-05B
 title: Store Setup (tenant first-run)
 app: pos-flutter
 priority: P1
+consumes_raw: **Implements:** P01-getting-started.md (US-P01-02 business/tax/payment, US-P01-08 staff)
 source: sakal-dev/pos-flutter:docs/specs/05b-store-setup.md@fp00000
 ---
 

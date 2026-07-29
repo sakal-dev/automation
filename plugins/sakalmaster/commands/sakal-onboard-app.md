@@ -58,11 +58,17 @@ and the app profile.
    - `--seed` supplies journey/persona/module for a FRESH tree (model
      judgment, per story key); an existing story file always wins over it.
    - It emits `epics/<KEY>.md` (verbatim spec sections, no status-field
-     lines), `stories/<EPIC>/<KEY>.md` (fenced-yaml ACs, VERBATIM text, raw
-     non-default `marker:`/`range:`/`tag:` fields), `proposals/consumes-raw.yaml`
-     (verbatim Consumes/Implements/Journey(s) keys — integer journey indices
-     resolve by index at promote time), and the findings.md status-voices
-     block (every voice quoted, contradictions named, nothing chosen).
+     lines; the consumes-slot line — `Consumes:`/`Implements:`/`Journey(s):` —
+     rides the frontmatter as `consumes_raw:`, verbatim, the one copy that
+     survives R1 deletion; integer journey indices resolve by index at
+     promote time), `stories/<EPIC>/<KEY>.md` (fenced-yaml ACs, VERBATIM
+     text, raw non-default `marker:`/`range:`/`tag:` fields, story-level
+     `consumes_raw:`), and the findings.md status-voices block (every voice
+     quoted, contradictions named, nothing chosen).
+   - Profile gates (A4): `conventions_files` are `@`-include-expanded and
+     must exist at the pin, never under the doomed spec dir; the `denylist`
+     DERIVES verbatim from the RULES denylist section — a diverging profile
+     input refuses with the diff.
    - **Exit 2 with "S1 loud-fail" → STOP and show the refusal verbatim.** The
      declared family does not parse some AC-like lines; extracting past them
      would silently drop ACs. Fix the declaration or the spec — never

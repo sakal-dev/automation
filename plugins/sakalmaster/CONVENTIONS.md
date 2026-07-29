@@ -111,6 +111,14 @@ A re-extracted tree carries two kinds of text, and two different laws apply:
   story triple gets an EMPTY story field and a warning naming the human work —
   prepare never fabricates a voice (fabrication is worse than absence).
 
+## AC-less stories (SKA-027, ruled)
+
+In an **imported (source-pinned) tree**, a story with no acceptance criteria
+is honest state — the spec has not defined them yet. Verify **warns**, never
+errors: the story submits as a story, is **never agent-ready**, and its brief
+must say "no ACs — define them first". In a **hand-authored tree** (no pin),
+no ACs stays an **error**: there, the absence means nobody wrote the promise.
+
 ## What is NOT in scope for a convention
 
 Whether an AC is the *right* AC. Whether an epic is worth shipping. Whether a

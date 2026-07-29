@@ -6,7 +6,7 @@ hand-written trees). Runner: `node golden.test.mjs`.
 
 | inputs/ | repo | pinned at | family |
 |---|---|---|---|
-| owner/ | sakal-dev/sakalpos-owner | `1e272bc` | reference (the A1 fixture pair) |
+| owner/ | sakal-dev/sakalpos-owner | `4b8f9bb` (post-D-03) | reference — expected pair is the INTERIM machinery output; the validator's revised A1 fixtures replace it on arrival (A3.4), moving the byte target exactly once |
 | stock/ | stock-flutter | `8139866` | reference (Consumes/Implements mix, decorated Priority) |
 | agent/ | agent-flutter | `bcc0fc1` | greenfield (no triple, Journey(s) integer index, AG-13 missing field) |
 | storefront/ | storefront-flutter | `b60b460` | asbuilt (checked ACs, no Priority, wrapped header, status-in-title) |

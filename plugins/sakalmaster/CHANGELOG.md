@@ -3,6 +3,35 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.8.0 — PART 0 amendments + promote consumers (SKA-027 · A3/A4 rulings)
+
+The A4 profile gates and the A3.1 reversal that SKA-026 shipped without.
+
+- **A3.1 — `consumes_raw:` lives in FRONTMATTER** (epic and, for per-story
+  `Implements:` lines, story) — key AND value verbatim, per family. After R1
+  deletes the spec files this is the traceability's ONLY home.
+  `proposals/consumes-raw.yaml` is dropped (an existing one is reported as
+  superseded — delete by hand; prepare never deletes). Verify's fidelity
+  gate now DEMANDS the line where the spec carries it — pre-A3.1 trees go
+  red on their epic docs until the (already-sequenced) prepare re-run.
+  Journey-index guidance (integers index the journeys doc; mint IDs at
+  promote, never letters) moved to the prepare report — one copy.
+- **B2 — `conventions_files`:** `@`-includes expanded at emission (a newborn
+  does not process CLAUDE.md includes — docs/RULES.md surfaces explicitly);
+  every file must exist AT THE PIN and match the working tree; any path
+  under the doomed spec directory refuses.
+- **B3 — the denylist DERIVES verbatim from the RULES denylist section**
+  (every backticked glob, in order); a diverging profile input refuses with
+  the diff. The garage re-run immediately caught what the hand-written
+  0.7.0 denylist understated (the Gradle/wrapper globs).
+- **AC-less story ruling:** in an imported (source-pinned) tree, NOACS is a
+  WARNING — honest state, never agent-ready, "define ACs first". A
+  hand-authored tree keeps the error. Stated in CONVENTIONS.md.
+- **Owner golden pair is INTERIM** (machinery-generated at owner @4b8f9bb,
+  post-D-03, with consumes_raw): the validator's revised A1 fixtures replace
+  it on arrival, moving the byte-regression target exactly once (A3.4).
+- Story-key convention check accepts the `FP-05B-01` letter shape.
+
 ## 0.7.0 — all four spec-format families (SKA-026 · D-01 survey)
 
 `/sakal-onboard-app` now extracts every surveyed spec set — ONE parser,

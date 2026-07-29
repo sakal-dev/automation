@@ -46,10 +46,12 @@ command that guesses is a command that surprises.
      epics.yaml first"*
 4. **Write only the selection.** Keys are identity (`spec:<app>:<KEY>`); create
    what is missing, never duplicate, never delete. ACs are born open; tasks land
-   **not** agent-ready.
+   **not** agent-ready. An AC-less story (imported honest state) submits as a
+   story and is never agent-ready — its ACs must be defined first.
 5. **Never submit `proposals/`.** They are carried to the spec-home by a human,
-   deliberately. (`proposals/consumes-raw.yaml` is promote-time material —
-   mapping raw Consumes/Journeys lines to real keys is a human'"'"'s call.)
+   deliberately. (Consumes/Journeys traceability lives in `consumes_raw:`
+   frontmatter since A3.1 — mapping it to real keys is promote-time work,
+   a human'"'"'s call.)
 6. **Always report whole-tree drift**, even for a scoped submit.
 7. **App profile → `sakal_update_app`.** When `config.yaml` carries an
    `app_profile:` block, map it onto the SKM-034 apps columns (`setup_cmd`,

@@ -50,6 +50,7 @@ import { execFileSync } from 'node:child_process'
 import {
   slug, parseSpec, acLetter, yamlUnquote, detectAcLines,
   renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals,
+  CONSUMES_SLOT, expandConventionIncludes, denylistFromRules,
   findDeclaration, findTestLabel, readScalars,
 } from './sakal-shared.mjs'
 
@@ -310,7 +311,7 @@ for (const { specRel, text, spec, epicKey } of parsed) {
     if (st.uncarried.length)
       report.notes.push(`${st.key}: ${st.uncarried.length} story-body line(s) not carried into the emission (first: ${specRel}:${st.uncarried[0].line} "${st.uncarried[0].text.slice(0, 60)}…") — they remain in the spec; the D-02 scan gates deletion`)
     if (st.extrasRaw.length)
-      for (const x of st.extrasRaw) report.unresolvableImported.push(`${st.key}: story-level ${x.slice(0, 90)} (captured to proposals/consumes-raw.yaml)`)
+      for (const x of st.extrasRaw) report.unresolvableImported.push(`${st.key}: story-level ${x.slice(0, 90)} (${CONSUMES_SLOT.test(x) ? 'carried in the story\'s consumes_raw frontmatter' : 'quoted here — its one copy'})`)
 
     // Cites: --cites entries are authoritative; otherwise carry forward from
     // the existing file. EVERYTHING is re-confirmed at the pin, and every
@@ -346,35 +347,14 @@ for (const { specRel, text, spec, epicKey } of parsed) {
   }
 }
 
-// ── S4 (A2): Consumes/Implements/Journey(s) → proposals/, verbatim ──────────
-// Key AND value, no normalization. Mapping to real project-layer keys is
-// promote-time work, so the capture lands in proposals/ — which verify
-// acknowledges and submit NEVER sends — rather than in frontmatter the
-// fixtures pin down.
+// ── S4/A3.1: the consumes slot lives in FRONTMATTER now — one copy, in the
+// record that survives R1 deletion. The renderers emit it; here only the
+// promote-time guidance and the superseded-file check remain.
 {
-  const lines = [
-    '# Header keys captured verbatim at extraction (S4, Addendum A2)',
-    '#',
-    '# Key AND value, no normalization — mapping "Consumes: …" to real journey/',
-    '# feature keys is project-layer work at propose/promote time, by a human.',
-    '# `Journey(s):` values are INTEGER INDICES into this set\'s journeys doc',
-    '# (numbered headings, no stable IDs) — resolve them by index into that doc',
-    '# at promote time and mint stable IDs there; do NOT invent letter keys.',
-    '# This file is never submitted.',
-    'consumes_raw:',
-  ]
-  let any = false
-  for (const v of statusVoices) for (const raw of v.extras) {
-    any = true
-    const idx = /^\*\*Journeys?:\*\*/.test(raw) ? '   # journey by index into the journeys doc' : ''
-    lines.push(`  - ${v.epicKey} — "${raw.replace(/"/g, '\\"')}"${idx}`)
-  }
-  // Story-level capture (flutter-pos `**Implements:** US-…` lines and kin).
-  for (const { spec } of parsed) for (const st of spec.stories) for (const raw of st.extrasRaw) {
-    any = true
-    lines.push(`  - ${st.key} — "${raw.replace(/"/g, '\\"')}"`)
-  }
-  if (any) write('proposals/consumes-raw.yaml', lines.join('\n') + '\n')
+  if (parsed.some(({ spec }) => spec.headerExtrasRaw.some(x => /^\*\*Journeys?:\*\*/.test(x))))
+    report.notes.push('`Journey(s):` values in consumes_raw are INTEGER INDICES into this set\'s journeys doc — resolve by index at promote time and mint stable IDs there; do NOT invent letter keys')
+  if (existsSync(join(dirAbs, 'proposals/consumes-raw.yaml')))
+    report.notes.push('proposals/consumes-raw.yaml is SUPERSEDED (A3.1): consumes_raw now lives in epic/story frontmatter — delete the file by hand; prepare never deletes')
 }
 
 // ── S5 (A2): status voices → findings.md, managed block, nothing chosen ─────
@@ -391,7 +371,11 @@ for (const { specRel, text, spec, epicKey } of parsed) {
     const trailerStr = [...v.trailers].map(([t, n]) => `${n}× \`${t}\``).join(' · ') || '(none)'
     const markerStr = [...v.markers].map(([m, n]) => `${n}× \`${m}\``).join(' · ') || '(none)'
     const inTextStr = [...v.inText].map(([e, n]) => `${n}× ${e}`).join(' · ')
-    body.push(`- **${v.epicKey}** — header: ${v.header ? `\`${v.header}\`` : '(none)'} · trailers: ${trailerStr} · AC markers: ${markerStr}${inTextStr ? ` · in-text AC status: ${inTextStr}` : ''}`)
+    // Non-consumes header extras (audit metadata: Implementation synced,
+    // Added, Last updated) — quoted HERE, their one copy; the consumes slot
+    // itself lives in the epic frontmatter (A3.1).
+    const metaStr = v.extras.filter(x => !CONSUMES_SLOT.test(x)).map(x => `\`${x}\``).join(' · ')
+    body.push(`- **${v.epicKey}** — header: ${v.header ? `\`${v.header}\`` : '(none)'} · trailers: ${trailerStr} · AC markers: ${markerStr}${inTextStr ? ` · in-text AC status: ${inTextStr}` : ''}${metaStr ? ` · header metadata: ${metaStr}` : ''}`)
     const checked = [...v.markers].filter(([m]) => m !== '[ ]').reduce((a, [, n]) => a + n, 0)
     if (checked && /🔴|planned/i.test(v.header ?? '')) body.push(`  - CONTRADICTION: the header claims planned while ${checked} AC marker(s) claim done — both quoted, neither believed.`)
     for (const c of v.conflicts) body.push(`  - CONTRADICTION (checkbox vs in-text): ${c} — both quoted, neither believed.`)
@@ -424,18 +408,47 @@ for (const [key, e] of existing)
   if (/^spec_family:/m.test(cur)) cur = cur.replace(/^spec_family:.*$/m, `spec_family: ${FAM.name}`)
   else cur = cur.replace(/\n*$/, '\n') + `\n# Spec-format family (D-01 survey) — verify's fidelity gate parses with the\n# same family parameters; the S1 loud-fail gate refuses a wrong declaration.\nspec_family: ${FAM.name}\n`
   if (profile) {
+    // B2 (A4): conventions_files — `@`-includes expanded at emission (a
+    // newborn does not process CLAUDE.md includes), every file confirmed to
+    // exist AT THE PIN, and nothing under the directory R1 deletes.
+    const readAtPin = p => gitShow(pin, p)
+    const { files: conv, missing } = expandConventionIncludes(readAtPin, profile.conventions_files ?? [])
+    if (missing.length) die(`conventions_files: ${missing.join(', ')} not in git at ${pin} — the profile must not name files outside the record (commit them, or fix the list)`)
+    const specsPrefix = SPECS.replace(/\/+$/, '')
+    const doomed = conv.filter(p => p === specsPrefix || p.startsWith(specsPrefix + '/'))
+    if (doomed.length) die(`conventions_files: ${doomed.join(', ')} live under ${specsPrefix}/, which R1 deletes after extraction — the profile must never name a doomed file`)
+    for (const p of conv) {
+      const wt = join(ROOT, p)
+      if (existsSync(wt) && readFileSync(wt, 'utf8') !== readAtPin(p))
+        die(`${p} differs from ${pin} in the working tree — commit it; the profile attests pinned bytes`)
+    }
+    // B3 (A4): the denylist is DERIVED from the RULES denylist section,
+    // verbatim; a diverging profile input is a refusal with the diff — an
+    // understated denylist is the profile lying about guardrails.
+    let denylist = profile.denylist ?? []
+    const rulesPath = conv.find(p => /(^|\/)RULES\.md$/i.test(p))
+    const derived = rulesPath ? denylistFromRules(readAtPin(rulesPath)) : []
+    if (derived.length) {
+      if (profile.denylist && profile.denylist.join('\n') !== derived.join('\n'))
+        die(`denylist diverges from the source of truth (${rulesPath} §denylist).\n  derived (verbatim): ${derived.join(', ')}\n  profile input:      ${profile.denylist.join(', ')}\nDrop the profile's denylist (it derives), or fix ${rulesPath}.`)
+      denylist = derived
+      report.notes.push(`denylist derived verbatim from ${rulesPath} (${derived.length} globs)`)
+    } else report.notes.push(`no denylist section found in the conventions files — denylist taken from the profile input as-is`)
+    report.notes.push(`conventions_files expanded: ${conv.join(', ')}`)
+
     const j = v => Array.isArray(v) ? v.join(', ') : (v ?? '')
     const block = [
       '',
-      '# App profile (SKA-025): declaration data for the SKM-034 apps columns.',
-      '# Submit maps it via sakal_update_app and holds it back gracefully when the',
-      '# server predates those columns. Lists are comma-separated.',
+      '# App profile (SKA-025/027): declaration data for the SKM-034 apps columns.',
+      '# denylist derives from the RULES denylist section; conventions_files are',
+      '# @-include-expanded. Submit maps via sakal_update_app, degrading gracefully',
+      '# when the server predates those columns. Lists are comma-separated.',
       'app_profile:',
       `  setup_cmd: ${profile.setup_cmd ?? ''}`,
       `  verify_cmd: ${profile.verify_cmd ?? ''}`,
-      `  denylist: ${j(profile.denylist)}`,
+      `  denylist: ${j(denylist)}`,
       `  evidence_format: ${profile.evidence_format ?? ''}`,
-      `  conventions_files: ${j(profile.conventions_files)}`,
+      `  conventions_files: ${j(conv)}`,
       '',
     ].join('\n')
     cur = cur

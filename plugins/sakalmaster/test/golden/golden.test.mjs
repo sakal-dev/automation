@@ -36,13 +36,18 @@ const eq = (got, want, label) => {
   }
 }
 
-// ── owner family: end-to-end render == the Addendum A1 fixtures ─────────────
-console.log('\n── owner family (fixtures byte-for-byte)')
+// ── owner family: end-to-end render == the owner expected pair ──────────────
+// A3.4/SKA-027: the A1 fixtures are held FOR revision by the validator
+// (consumes_raw added, AC-a post-D-03). The pair below is the INTERIM
+// machinery-generated stand-in at owner @4b8f9bb — it is REPLACED by the
+// validator's revised fixtures when they arrive via the operator; the
+// byte-regression target moves with them, deliberately and exactly once.
+console.log('\n── owner family (interim expected pair, pending validator fixture revision)')
 {
-  const ctx = { epicKey: 'OA-01', app: 'owner-flutter', specRel: 'docs/specs/OA-01-platform-auth-shell.md', repoId: 'sakal-dev/sakalpos-owner', pin: '1e272bc' }
+  const ctx = { epicKey: 'OA-01', app: 'owner-flutter', specRel: 'docs/specs/OA-01-platform-auth-shell.md', repoId: 'sakal-dev/sakalpos-owner', pin: '4b8f9bb' }
   const spec = parseSpec(read('inputs/owner/OA-01-platform-auth-shell.md'))
 
-  eq(renderEpicDoc(spec, ctx), read('expected/owner/epics/OA-01.md'), 'epics/OA-01.md == fixture 1')
+  eq(renderEpicDoc(spec, ctx), read('expected/owner/epics/OA-01.md'), 'epics/OA-01.md == owner expected (interim, A3.1 consumes_raw)')
 
   // The fixture's cites, pre-confirmed (confirmation itself is prepare's git
   // work; the golden suite pins the render contract).
@@ -54,7 +59,7 @@ console.log('\n── owner family (fixtures byte-for-byte)')
   ])
   const st = spec.stories.find(s => s.key === 'OA-01-01')
   eq(renderStoryDoc(st, { ...ctx, journey: 'OA-J1', persona: 'developer', module: 'shell', cites }),
-    read('expected/owner/stories/OA-01/OA-01-01.md'), 'stories/OA-01/OA-01-01.md == fixture 2')
+    read('expected/owner/stories/OA-01/OA-01-01.md'), 'stories/OA-01/OA-01-01.md == owner expected (interim, post-D-03 AC-a)')
 
   // S1 must be quiet on a family the parser fully covers.
   const detected = detectAcLines(read('inputs/owner/OA-01-platform-auth-shell.md'))

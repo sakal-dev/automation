@@ -445,6 +445,10 @@ export function renderEpicDoc(spec, { epicKey, app, specRel, repoId, pin }) {
   // `MVP (car care + garage)`).
   if (spec.tier != null) fm.push(`tier: ${spec.tier}`)
   if (spec.priority != null) fm.push(`priority: ${spec.priority}`)
+  // A3.1: the consumes-slot line, verbatim — after R1 deletes the spec files,
+  // this frontmatter is the ONLY home of the epic's traceability line.
+  const consumes = consumesOf(spec.headerExtrasRaw)
+  if (consumes) fm.push(`consumes_raw: ${consumes}`)
   fm.push(`source: ${repoId}:${specRel}@${pin}`)
   const sections = spec.sections.map(s => `## ${s.heading}\n\n${s.body}`).join('\n\n')
   return `---\n${fm.join('\n')}\n---\n\n${sections}\n`
@@ -460,8 +464,12 @@ export function renderStoryDoc(st, { epicKey, app, specRel, repoId, pin, journey
   if (module) fmLines.push(`module: ${module}`)
   // tags carry the leading `P<d>` token only; the verbatim trailer (with its
   // qualifiers and status voice) is quoted in findings.md by S5.
-  fmLines.push(`tags: [${st.priorityCode ?? ''}]`, 'out_of_scope: []',
-    `source: ${repoId}:${specRel}#${st.anchor}@${pin}`)
+  fmLines.push(`tags: [${st.priorityCode ?? ''}]`, 'out_of_scope: []')
+  // A3.1, story level: flutter-pos carries per-story `**Implements:** US-…`
+  // lines — same traceability rule, same one-copy home.
+  const stConsumes = consumesOf(st.extrasRaw ?? [])
+  if (stConsumes) fmLines.push(`consumes_raw: ${stConsumes}`)
+  fmLines.push(`source: ${repoId}:${specRel}#${st.anchor}@${pin}`)
 
   // The sentence is AUTHORED (conventions govern it) — but only from a real
   // triple. A family without one gets an EMPTY story field, reported, because
@@ -500,6 +508,48 @@ export function renderStoryDoc(st, { epicKey, app, specRel, repoId, pin, journey
   }).join('\n')
 
   return `---\n${fmLines.join('\n')}\n---\n\n${sentence ? `${sentence}\n\n` : ''}## Acceptance criteria\n\n\`\`\`yaml\n${acBlocks}\n\`\`\`\n`
+}
+
+// ── the consumes slot (A3.1) ────────────────────────────────────────────────
+// The traceability line that must survive R1 deletion: `Consumes:` /
+// `Implements:` / `Journey(s):` header (and story-level) fields, carried
+// VERBATIM into frontmatter — the one copy, in the record that outlives the
+// spec files. Everything else in the header extras is audit metadata and goes
+// to the findings status-voices block instead.
+export const CONSUMES_SLOT = /^\*\*(Consumes|Implements|Journeys?):\*\*/
+export const consumesOf = extras => extras.filter(x => CONSUMES_SLOT.test(x)).join(' · ')
+
+// ── B2 (A4): conventions_files — expand `@`-includes, explicitly ────────────
+// A newborn does not process CLAUDE.md's `@path` includes; anything a listed
+// file pulls in is listed explicitly. readFn(path) → content or null.
+// Deterministic order: each file before its includes, first-seen wins.
+export function expandConventionIncludes(readFn, paths) {
+  const files = [], missing = [], seen = new Set()
+  const visit = p => {
+    if (seen.has(p)) return
+    seen.add(p)
+    const content = readFn(p)
+    if (content == null) { missing.push(p); return }
+    files.push(p)
+    for (const m of String(content).matchAll(/^@(\S+)\s*$/gm)) visit(m[1])
+  }
+  for (const p of paths) visit(p)
+  return { files, missing }
+}
+
+// ── B3 (A4): the denylist DERIVED from the RULES denylist section ───────────
+// Every backticked glob in the `## … denylist …` section body, in order,
+// VERBATIM. An understated denylist is the profile lying about guardrails —
+// the caller refuses on divergence rather than reviewing it.
+export function denylistFromRules(text) {
+  let inSection = false
+  const globs = []
+  for (const l of String(text).split('\n')) {
+    const h = l.match(/^##+\s+(.*)$/)
+    if (h) { inSection = /denylist/i.test(h[1]); continue }
+    if (inSection) for (const m of l.matchAll(/`([^`]+)`/g)) globs.push(m[1])
+  }
+  return globs
 }
 
 // ── ONE declaration / test-label matcher ────────────────────────────────────
