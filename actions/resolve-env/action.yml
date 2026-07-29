@@ -1,0 +1,128 @@
+# =============================================================================
+# resolve-env — the ONE place an environment is named.
+#
+# THE BUG THIS EXISTS FOR (SKA-022): the engine had no environment concept and
+# hardcoded staging's URL + key in four separate places — sweep.yml,
+# reviewer.yml, claim-sakal, report-sakal. That was written when staging was the
+# only hosted environment. It no longer is, and because `automation-install`
+# onboards CUSTOMER repos with those same defaults, a customer's agent would
+# have claimed tasks from — and reported cost into — OUR STAGING PROJECT. That
+# is a data-boundary problem, not a config nit.
+#
+# Four copies of an environment is how it drifted, so the fix is the shape and
+# not just the values: every caller resolves here, and adding an environment is
+# one edit in one file.
+#
+# DEFAULT IS PRODUCTION. A customer who configures nothing must reach the right
+# place; staging is now the deliberate override, never the accident.
+#
+# The override travels in a repo VARIABLE, not the caller's YAML, so the caller
+# template is byte-identical in every repo forever:
+#
+#     with:
+#       source: sakalmaster
+#       sakal_env: ${{ vars.SAKAL_ENV }}   # empty everywhere but platform repos
+#
+# `vars` is evaluated in the CALLER, where that repository's variables are
+# unambiguously available — so this deliberately does NOT depend on whether a
+# called reusable workflow can read the caller's `vars` context.
+#
+# THE TRADE-OFF, STATED: an override in repo settings is invisible in the repo's
+# code — you cannot tell from the YAML which environment a repo talks to. That
+# is why this action PRINTS the resolved environment and project ref on every
+# run: a run log must always answer "which SakalMaster did this talk to?".
+# =============================================================================
+name: resolve-env
+description: "Resolve production|staging (empty = production) to the SakalMaster Supabase URL + publishable key, and say so in the log"
+
+inputs:
+  sakal_env:
+    description: "production | staging. Empty resolves to production."
+    required: false
+    default: ""
+  sakal_supabase_url:
+    description: "Explicit URL — self-hosted escape hatch. Overrides sakal_env when set."
+    required: false
+    default: ""
+  sakal_supabase_publishable_key:
+    description: "Explicit publishable key (public). Must be set together with the URL."
+    required: false
+    default: ""
+
+outputs:
+  url:
+    description: The resolved SakalMaster Supabase URL
+    value: ${{ steps.resolve.outputs.url }}
+  publishable_key:
+    description: The resolved publishable key (public by design)
+    value: ${{ steps.resolve.outputs.publishable_key }}
+  environment:
+    description: The resolved environment name, for logs and downstream steps
+    value: ${{ steps.resolve.outputs.environment }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        IN_ENV: ${{ inputs.sakal_env }}
+        IN_URL: ${{ inputs.sakal_supabase_url }}
+        IN_KEY: ${{ inputs.sakal_supabase_publishable_key }}
+      run: |
+        set -euo pipefail
+
+        # Both hosted environments, named once. Keys are publishable — public by
+        # design, and safe in a log; the URL and its key must always travel
+        # together, because a prod URL with a staging key fails as a confusing
+        # auth error rather than an obvious misconfiguration.
+        PROD_URL="https://gubehzbezjkkszhwjjnj.supabase.co"
+        PROD_KEY="sb_publishable_jQKMbs0FhRirLJ4t7Rrcag__iBdcD0G"
+        STAGING_URL="https://yfsempkvvdglebtlkztn.supabase.co"
+        STAGING_KEY="sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+
+        # An explicit URL wins — that is the self-hosted escape hatch. Require
+        # the key with it rather than silently pairing someone's own URL with a
+        # hosted key.
+        if [ -n "$IN_URL" ]; then
+          if [ -z "$IN_KEY" ]; then
+            echo "::error::sakal_supabase_url was set without sakal_supabase_publishable_key. A URL and its key must travel together." >&2
+            exit 1
+          fi
+          URL="$IN_URL"; KEY="$IN_KEY"; NAME="self-hosted"
+        else
+          case "${IN_ENV:-}" in
+            ""|production) URL="$PROD_URL"; KEY="$PROD_KEY"; NAME="production" ;;
+            staging)       URL="$STAGING_URL"; KEY="$STAGING_KEY"; NAME="staging" ;;
+            *)
+              echo "::error::unknown sakal_env '${IN_ENV}'. Use 'production', 'staging', or leave it empty for production." >&2
+              exit 1
+              ;;
+          esac
+        fi
+
+        REF="$(printf '%s' "$URL" | sed -E 's#https://([^.]+)\..*#\1#')"
+
+        {
+          echo "url=$URL"
+          echo "publishable_key=$KEY"
+          echo "environment=$NAME"
+        } >> "$GITHUB_OUTPUT"
+
+        # A repo variable is invisible in the repo's code, so the run log is the
+        # only place this question can be answered after the fact. Say it loudly.
+        echo "::notice title=SakalMaster environment::${NAME} — project ${REF} (${URL})"
+        {
+          echo "### SakalMaster environment"
+          echo ""
+          echo "| | |"
+          echo "|---|---|"
+          echo "| environment | \`${NAME}\` |"
+          echo "| project | \`${REF}\` |"
+          echo "| url | ${URL} |"
+          echo ""
+          if [ "$NAME" = "staging" ]; then
+            echo "> Staging is reserved for the platform's own repositories."
+            echo "> It is set by the repository variable \`SAKAL_ENV\`, not by this repo's YAML."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

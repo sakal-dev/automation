@@ -23,11 +23,11 @@ inputs:
   sakal_supabase_url:
     description: SakalMaster SUPABASE project URL (defaults to the hosted instance)
     required: false
-    default: "https://yfsempkvvdglebtlkztn.supabase.co"
+    default: "https://gubehzbezjkkszhwjjnj.supabase.co"
   sakal_supabase_publishable_key:
-    description: Supabase publishable key (public; defaults to the hosted instance)
+    description: Supabase publishable key (public; defaults to PRODUCTION)
     required: false
-    default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+    default: "sb_publishable_jQKMbs0FhRirLJ4t7Rrcag__iBdcD0G"
   token:
     description: "PAT fallback for non-Actions runners. Leave empty in Actions."
     required: false

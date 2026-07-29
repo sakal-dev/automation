@@ -112,11 +112,11 @@ on:
       sakal_supabase_url:
         description: SakalMaster SUPABASE project URL
         type: string
-        default: "https://yfsempkvvdglebtlkztn.supabase.co"
+        default: "https://gubehzbezjkkszhwjjnj.supabase.co"
       sakal_supabase_publishable_key:
         description: Supabase publishable key (public)
         type: string
-        default: "sb_publishable_cxsc_iXaPmHoqAmwqgqURw_eHaO7Kaj"
+        default: "sb_publishable_jQKMbs0FhRirLJ4t7Rrcag__iBdcD0G"
 
 jobs:
   review:
