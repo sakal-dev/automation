@@ -49,7 +49,7 @@ import { join, dirname, isAbsolute } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import {
   slug, parseSpec, acLetter, yamlUnquote, detectAcLines,
-  renderEpicDoc, renderStoryDoc,
+  renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals,
   findDeclaration, findTestLabel, readScalars,
 } from './sakal-shared.mjs'
 
@@ -62,6 +62,8 @@ const OUT = opt('--out', null)              // default: write into ROOT/DIR
 const citesPath = opt('--cites', null)
 const profilePath = opt('--profile', null)
 
+const seedPath = opt('--seed', null)
+const familyFlag = opt('--family', null)
 const dirAbs = isAbsolute(DIR) ? DIR : join(ROOT, DIR)
 const outAbs = OUT ?? dirAbs
 const specsAbs = isAbsolute(SPECS) ? SPECS : join(ROOT, SPECS)
@@ -93,17 +95,38 @@ function gitShow(sha, path) {
 if (!existsSync(specsAbs)) die(`${SPECS}/ does not exist — prepare re-extracts from the spec set and there is none to read`)
 const cites = citesPath ? JSON.parse(readFileSync(citesPath, 'utf8')) : {}
 const profile = profilePath ? JSON.parse(readFileSync(profilePath, 'utf8')) : null
+// --seed: model-authored frontmatter for a FRESH tree (journey/persona/module
+// per story key) — the judgment inputs a first extraction cannot derive.
+// An existing story file always wins over the seed.
+const seed = seedPath ? JSON.parse(readFileSync(seedPath, 'utf8')) : {}
 
 const cfgPath = join(dirAbs, 'config.yaml')
-const cfg = existsSync(cfgPath) ? readScalars(readFileSync(cfgPath, 'utf8')) : {}
+const cfgText = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : ''
+const cfg = readScalars(cfgText)
 const APP = cfg.app?.value ?? null
 if (!APP) die(`${DIR}/config.yaml has no \`app\` — the epic and story frontmatter carry it, and it is a declaration, not a guess`)
 
-// Spec files: `<PREFIX>-<NN>-*.md`, sorted by epic number. Deterministic.
+// ── the spec-format family (SKA-026) ────────────────────────────────────────
+// Resolution: --family flag > config `spec_family:` > unanimous strong signal
+// from the files > `reference`. The resolved family is DECLARED back into
+// config.yaml so verify parses fidelity with the exact same parameters.
+// Per-file signals may only VETO (a contradiction is a refusal, never a guess).
+const famName = familyFlag ?? cfg.spec_family?.value ?? null
+if (famName && !FAMILIES[famName]) die(`unknown spec family "${famName}" — one of: ${Object.keys(FAMILIES).join(', ')}`)
+let FAM = famName ? FAMILIES[famName] : null
+if (!FAM) {
+  const seen = new Set()
+  for (const f of readdirSync(specsAbs).filter(n => n.endsWith('.md') && !/^00-/.test(n) && !/^README/i.test(n)))
+    for (const s of detectFamilySignals(readFileSync(join(specsAbs, f), 'utf8'))) seen.add(s.family)
+  if (seen.size > 1) die(`spec family is ambiguous — signals for {${[...seen].join(', ')}} across ${SPECS}/. Declare one: --family <name> or \`spec_family:\` in config.yaml`)
+  FAM = FAMILIES[[...seen][0] ?? 'reference']
+}
+
+// Spec files by the family's naming convention, sorted. Deterministic.
 const specFiles = readdirSync(specsAbs)
-  .filter(f => /^[A-Za-z]{2,}-\d{2}-.*\.md$/.test(f))
+  .filter(f => FAM.filePattern.test(f) && !/^00-/.test(f) && !/^README/i.test(f))
   .sort((a, b) => a.localeCompare(b, 'en'))
-if (!specFiles.length) die(`${SPECS}/ has no <PREFIX>-<NN>-*.md spec files`)
+if (!specFiles.length) die(`${SPECS}/ has no spec files matching the ${FAM.name} family's naming (${FAM.filePattern})`)
 
 // Existing story files, keyed by story key — the convergence baseline.
 // journey/persona/module are PRESERVED from them (addendum item 2); cites are
@@ -168,31 +191,65 @@ const write = (relPath, content) => {
 // mode — is impossible by construction. A non-owner spec family refuses
 // loudly here instead of extracting wrongly.
 const parsed = []
-const s1Violations = []
+const s1Violations = [], vetoes = [], dirty = []
 for (const file of specFiles) {
   const specRel = `${SPECS}/${file}`
   const text = readFileSync(join(specsAbs, file), 'utf8')
-  const spec = parseSpec(text)
+
+  // THE PIN MUST BE TRUTHFUL: emitted text claims `@<pin>`, so the working
+  // tree must equal the pinned bytes. An uncommitted spec edit would make
+  // every source line a lie — refuse, don't launder.
+  const pinned = gitShow(pin, specRel)
+  if (pinned == null) { dirty.push(`${specRel}: not in git at ${pin} (untracked or new) — commit it first`); continue }
+  if (pinned !== text) { dirty.push(`${specRel}: working tree differs from ${pin} — commit the spec edits first (the pin must be truthful)`); continue }
+
+  // Family veto: a strong header signal for a DIFFERENT family is a refusal
+  // naming both candidates — never a guess, never a silent misparse.
+  for (const s of detectFamilySignals(text))
+    if (s.family !== FAM.name) vetoes.push(`${specRel}: declared family "${FAM.name}" but ${s.why} → "${s.family}"`)
+
+  // Epic key: from the filename, except legacyflat (flutter-pos), where NO
+  // filename carries a key — the `**Story prefix:**` header line does.
+  let epicKey = null
+  if (FAM.epicKeyFrom === 'filename') epicKey = file.match(/^([A-Za-z]{2,}-\d{2})/)?.[1] ?? null
+  else {
+    const sp = text.match(/\*\*Story prefix:\*\*\s*`?([A-Za-z]{2,}-\d{2}[A-Za-z]?)-`?/)
+    epicKey = sp ? sp[1] : null
+  }
+  if (!epicKey) { report.refusals.push(`${specRel}: no epic key derivable (${FAM.epicKeyFrom === 'filename' ? 'filename carries none' : 'no **Story prefix:** header line'}) — file skipped LOUDLY`); continue }
+
+  const spec = parseSpec(text, FAM, { epicKey })
   const detected = detectAcLines(text)
   const parsedLines = new Set(spec.stories.flatMap(st => st.acs.map(a => a.line)))
   for (const [line, raw] of detected)
     if (!parsedLines.has(line))
       s1Violations.push(`${specRel}:${line}  AC-like line not parsed: "${raw.length > 100 ? raw.slice(0, 100) + '…' : raw}"`)
-  parsed.push({ file, specRel, text, spec })
+  parsed.push({ file, specRel, text, spec, epicKey })
+}
+if (dirty.length) {
+  console.error(`REFUSED — ${dirty.length} spec file(s) are not identical to the pin (${pin}). Nothing was emitted.`)
+  for (const d of dirty) console.error(`  ${d}`)
+  process.exit(2)
+}
+if (vetoes.length) {
+  console.error(`REFUSED — family detection contradicts the declared family. Nothing was emitted; a guess here misparses silently.`)
+  for (const v of vetoes) console.error(`  ${v}`)
+  console.error(`\nDeclare the right one (--family / config \`spec_family:\`) or split the spec sets.`)
+  process.exit(2)
 }
 if (s1Violations.length) {
-  console.error(`REFUSED — S1 loud-fail invariant: ${s1Violations.length} AC-like line(s) detected that the extractor did not parse.`)
+  console.error(`REFUSED — S1 loud-fail invariant: ${s1Violations.length} AC-like line(s) detected that the "${FAM.name}" family parameters did not parse.`)
   console.error('Nothing was emitted. Extracting past these would silently drop acceptance criteria (the D-01 failure mode).\n')
   for (const v of s1Violations) console.error(`  ${v}`)
-  console.error('\nEither the spec family is not supported yet (SKA-026 parameterizes the machinery), or the line is malformed — fix the spec or extend the family.')
+  console.error('\nEither the family declaration is wrong, the family is not supported yet, or the line is malformed — fix the declaration or the spec, or extend the family.')
   process.exit(2)
 }
 
 const specStoryKeys = new Set()
 const statusVoices = []
-for (const { file, specRel, text, spec } of parsed) {
-  const epicKey = file.match(/^([A-Za-z]{2,}-\d{2})/)[1]
+for (const { specRel, text, spec, epicKey } of parsed) {
   if (!spec.title) { report.refusals.push(`${specRel}: no H1 title — epic ${epicKey} not emitted`); continue }
+  if (!spec.stories.length) report.notes.push(`${specRel}: ZERO stories under prefix ${epicKey}- (a declared-prefix, story-less spec) — epic doc emitted, nothing else; not an error, but a human should know`)
 
   // Duplicate-anchor guard: an ambiguous anchor is silently ambiguous
   // provenance, and that is never emitted (0.5.1 slugger doctrine).
@@ -207,12 +264,25 @@ for (const { file, specRel, text, spec } of parsed) {
   // S5 (A2): every status voice captured verbatim — header, story trailers,
   // marker distribution. Quoted into findings.md below; NOTHING is chosen.
   {
-    const trailers = new Map(), markers = new Map()
+    const trailers = new Map(), markers = new Map(), inText = new Map(), conflicts = []
     for (const st of spec.stories) {
       if (st.statusTrailerRaw) trailers.set(st.statusTrailerRaw, (trailers.get(st.statusTrailerRaw) ?? 0) + 1)
-      for (const ac of st.acs) markers.set(ac.marker, (markers.get(ac.marker) ?? 0) + 1)
+      for (const ac of st.acs) {
+        markers.set(ac.marker, (markers.get(ac.marker) ?? 0) + 1)
+        // The as-built families carry a FIFTH status voice: an emoji leading
+        // the AC text itself (`— ✅ Built — …`). Counted, and checked against
+        // the checkbox it rides on — a `[x]` over a 🔴/🟡 text (or a `[ ]`
+        // over a ✅) is a contradiction to quote, not resolve.
+        const t = ac.text.match(/^(✅|🔴|🟡|🟢|🟣|⚪)/)
+        if (t) {
+          inText.set(t[1], (inText.get(t[1]) ?? 0) + 1)
+          const checked = /\[[xX]\]/.test(ac.marker)
+          if ((checked && (t[1] === '🔴' || t[1] === '🟡')) || (!checked && /\[\s\]/.test(ac.marker) && t[1] === '✅'))
+            conflicts.push(`${st.key} AC-${ac.n ?? '?'}: checkbox ${ac.marker} vs in-text ${t[1]}`)
+        }
+      }
     }
-    statusVoices.push({ epicKey, header: spec.statusHeaderRaw, trailers, markers, extras: spec.headerExtrasRaw })
+    statusVoices.push({ epicKey, header: spec.statusHeaderRaw, trailers, markers, inText, conflicts, extras: spec.headerExtrasRaw })
   }
 
   // Imported reference lines whose relative links escape the repo: preserved
@@ -234,6 +304,13 @@ for (const { file, specRel, text, spec } of parsed) {
     // the heading/first paragraph is provenance context, not a fake voice.
     if (st.persona == null || st.want == null || st.soThat == null)
       report.notes.push(`${st.key}: no As-a/I-want/So-that triple in the spec — story sentence left EMPTY (S3); a human should voice it. Context: "${(st.context ?? st.title).slice(0, 80)}"`)
+    // Story-body lines the emission does not carry (in-story blockquotes,
+    // stray prose): named LOUDLY — they stay in the spec, and the per-repo
+    // D-02 homeless-content scan gates any spec deletion.
+    if (st.uncarried.length)
+      report.notes.push(`${st.key}: ${st.uncarried.length} story-body line(s) not carried into the emission (first: ${specRel}:${st.uncarried[0].line} "${st.uncarried[0].text.slice(0, 60)}…") — they remain in the spec; the D-02 scan gates deletion`)
+    if (st.extrasRaw.length)
+      for (const x of st.extrasRaw) report.unresolvableImported.push(`${st.key}: story-level ${x.slice(0, 90)} (captured to proposals/consumes-raw.yaml)`)
 
     // Cites: --cites entries are authoritative; otherwise carry forward from
     // the existing file. EVERYTHING is re-confirmed at the pin, and every
@@ -257,11 +334,13 @@ for (const { file, specRel, text, spec } of parsed) {
       resolved.set(letter, list)
     })
 
+    // Frontmatter judgment values: existing file > --seed > derived persona.
+    const sd = seed[st.key] ?? {}
     write(`stories/${epicKey}/${st.key}.md`, renderStoryDoc(st, {
       epicKey, app: APP, specRel, repoId, pin,
-      journey: prev?.fm.journey?.value ?? null,
-      persona: prev?.fm.persona?.value ?? slug(st.persona ?? '').split('-')[0],
-      module: prev?.fm.module?.value ?? null,
+      journey: prev?.fm.journey?.value ?? sd.journey ?? null,
+      persona: prev?.fm.persona?.value ?? sd.persona ?? slug(st.persona ?? '').split('-')[0],
+      module: prev?.fm.module?.value ?? sd.module ?? null,
       cites: resolved,
     }))
   }
@@ -278,11 +357,23 @@ for (const { file, specRel, text, spec } of parsed) {
     '#',
     '# Key AND value, no normalization — mapping "Consumes: …" to real journey/',
     '# feature keys is project-layer work at propose/promote time, by a human.',
+    '# `Journey(s):` values are INTEGER INDICES into this set\'s journeys doc',
+    '# (numbered headings, no stable IDs) — resolve them by index into that doc',
+    '# at promote time and mint stable IDs there; do NOT invent letter keys.',
     '# This file is never submitted.',
     'consumes_raw:',
   ]
   let any = false
-  for (const v of statusVoices) for (const raw of v.extras) { any = true; lines.push(`  - ${v.epicKey} — "${raw.replace(/"/g, '\\"')}"`) }
+  for (const v of statusVoices) for (const raw of v.extras) {
+    any = true
+    const idx = /^\*\*Journeys?:\*\*/.test(raw) ? '   # journey by index into the journeys doc' : ''
+    lines.push(`  - ${v.epicKey} — "${raw.replace(/"/g, '\\"')}"${idx}`)
+  }
+  // Story-level capture (flutter-pos `**Implements:** US-…` lines and kin).
+  for (const { spec } of parsed) for (const st of spec.stories) for (const raw of st.extrasRaw) {
+    any = true
+    lines.push(`  - ${st.key} — "${raw.replace(/"/g, '\\"')}"`)
+  }
   if (any) write('proposals/consumes-raw.yaml', lines.join('\n') + '\n')
 }
 
@@ -299,9 +390,11 @@ for (const { file, specRel, text, spec } of parsed) {
   for (const v of statusVoices) {
     const trailerStr = [...v.trailers].map(([t, n]) => `${n}× \`${t}\``).join(' · ') || '(none)'
     const markerStr = [...v.markers].map(([m, n]) => `${n}× \`${m}\``).join(' · ') || '(none)'
-    body.push(`- **${v.epicKey}** — header: ${v.header ? `\`${v.header}\`` : '(none)'} · trailers: ${trailerStr} · AC markers: ${markerStr}`)
+    const inTextStr = [...v.inText].map(([e, n]) => `${n}× ${e}`).join(' · ')
+    body.push(`- **${v.epicKey}** — header: ${v.header ? `\`${v.header}\`` : '(none)'} · trailers: ${trailerStr} · AC markers: ${markerStr}${inTextStr ? ` · in-text AC status: ${inTextStr}` : ''}`)
     const checked = [...v.markers].filter(([m]) => m !== '[ ]').reduce((a, [, n]) => a + n, 0)
     if (checked && /🔴|planned/i.test(v.header ?? '')) body.push(`  - CONTRADICTION: the header claims planned while ${checked} AC marker(s) claim done — both quoted, neither believed.`)
+    for (const c of v.conflicts) body.push(`  - CONTRADICTION (checkbox vs in-text): ${c} — both quoted, neither believed.`)
   }
   body.push(E, '')
   const findingsPath = join(OUT ? outAbs : dirAbs, 'findings.md')
@@ -324,36 +417,39 @@ for (const [key, e] of existing)
 // ── app profile → config.yaml ───────────────────────────────────────────────
 // App-level declaration data lives in the app-level file. Lists are comma-
 // joined scalars so the config grammar stays one you can hold in your head.
-if (profile) {
-  const j = v => Array.isArray(v) ? v.join(', ') : (v ?? '')
-  const block = [
-    '',
-    '# App profile (SKA-025): declaration data for the SKM-034 apps columns.',
-    '# Submit maps it via sakal_update_app and holds it back gracefully when the',
-    '# server predates those columns. Lists are comma-separated.',
-    'app_profile:',
-    `  setup_cmd: ${profile.setup_cmd ?? ''}`,
-    `  verify_cmd: ${profile.verify_cmd ?? ''}`,
-    `  denylist: ${j(profile.denylist)}`,
-    `  evidence_format: ${profile.evidence_format ?? ''}`,
-    `  conventions_files: ${j(profile.conventions_files)}`,
-    '',
-  ].join('\n')
-  const cur = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : ''
-  // Replace an existing block (comment lines + app_profile: + indented lines),
-  // else append. Idempotent, so two runs are byte-identical.
-  const stripped = cur
-    .replace(/\n*(?:# App profile[^\n]*\n(?:#[^\n]*\n)*)?app_profile:\n(?:[ \t]+[^\n]*\n?)*/g, '\n')
-    .replace(/\n+$/, '\n')
-  const cfgOut = stripped + block
+{
+  let cur = cfgText
+  // The resolved family is DECLARED into config.yaml so verify parses
+  // fidelity with the exact same parameters. Replace-or-append, idempotent.
+  if (/^spec_family:/m.test(cur)) cur = cur.replace(/^spec_family:.*$/m, `spec_family: ${FAM.name}`)
+  else cur = cur.replace(/\n*$/, '\n') + `\n# Spec-format family (D-01 survey) — verify's fidelity gate parses with the\n# same family parameters; the S1 loud-fail gate refuses a wrong declaration.\nspec_family: ${FAM.name}\n`
+  if (profile) {
+    const j = v => Array.isArray(v) ? v.join(', ') : (v ?? '')
+    const block = [
+      '',
+      '# App profile (SKA-025): declaration data for the SKM-034 apps columns.',
+      '# Submit maps it via sakal_update_app and holds it back gracefully when the',
+      '# server predates those columns. Lists are comma-separated.',
+      'app_profile:',
+      `  setup_cmd: ${profile.setup_cmd ?? ''}`,
+      `  verify_cmd: ${profile.verify_cmd ?? ''}`,
+      `  denylist: ${j(profile.denylist)}`,
+      `  evidence_format: ${profile.evidence_format ?? ''}`,
+      `  conventions_files: ${j(profile.conventions_files)}`,
+      '',
+    ].join('\n')
+    cur = cur
+      .replace(/\n*(?:# App profile[^\n]*\n(?:#[^\n]*\n)*)?app_profile:\n(?:[ \t]+[^\n]*\n?)*/g, '\n')
+      .replace(/\n+$/, '\n') + block
+    report.notes.push(`config.yaml: spec_family + app_profile written (${OUT ? 'to --out copy' : 'in place'})`)
+  } else report.notes.push(`config.yaml: spec_family: ${FAM.name} declared; no --profile given — existing app_profile (if any) left untouched`)
   const cfgOutPath = OUT ? join(outAbs, 'config.yaml') : cfgPath
   mkdirSync(dirname(cfgOutPath), { recursive: true })
-  writeFileSync(cfgOutPath, cfgOut)
-  report.notes.push(`config.yaml: app_profile written (${OUT ? 'to --out copy' : 'in place'})`)
-} else report.notes.push('config.yaml: no --profile given — existing app_profile (if any) left untouched')
+  writeFileSync(cfgOutPath, cur)
+}
 
 // ── the prepare report ──────────────────────────────────────────────────────
-console.log(`\n  prepare re-extract — pin ${pin} (HEAD at prepare time, one pin per run) · repo ${repoId}`)
+console.log(`\n  prepare re-extract — pin ${pin} (HEAD at prepare time, one pin per run) · repo ${repoId} · family ${FAM.name}`)
 console.log(`  specs: ${specFiles.length} files → ${report.emitted.filter(f => f.startsWith('epics/')).length} epics, ${report.emitted.filter(f => f.startsWith('stories/')).length} stories emitted${OUT ? ` → ${OUT}` : ''}\n`)
 if (report.newStories.length) { console.log('  NEW stories (not in the existing tree):'); for (const x of report.newStories) console.log(`    ${x}`) }
 if (report.orphans.length) { console.log('  ORPHANS (in the tree, not in any spec — kept, never deleted):'); for (const x of report.orphans) console.log(`    ${x}`) }

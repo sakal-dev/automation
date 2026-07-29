@@ -1,0 +1,69 @@
+# Flutter POS · 38 · Mode Transition (offline ↔ cloud migration)
+
+> **Implements:** the upsell promise in [35-offline-mode.md](35-offline-mode.md) ("the format is chosen so a client can later **upsell to hybrid** by pushing all local data to the backend in one operation"); platform foundation P16.
+> **Status:** 🟣 Scoped — build **post-launch** (owner decision 2026-06-16). This doc is the planning anchor; per-task dispatch prompts are deferred until we build.
+> **Priority:** P1 — the offline→cloud upgrade is the monetization path (countryside client starts on the offline SKU, grows, upsells to hybrid). NOT a v1-launch blocker: a terminal that picks its mode at setup and stays there is fully functional.
+> **Story prefix:** FP-38-
+> **Last updated:** 2026-06-16
+
+## The rule this exists to honor
+
+A terminal's `AppMode` (offline / hybrid / online) is chosen at **Terminal Setup** and changes **only** through the programmatic transition flow specified here — **never** a one-tap toggle. The naive `SegmentedButton` in `settings/sections/sync_section.dart` that called `setMode()` instantly is being removed (**POS-087**) because it skips every migration step below (flip→online orphans local data; flip→offline empties the catalog) and re-opens the catalog-clobber footgun [POS-083] closes. `setMode()` remains the low-level primitive; this flow is the only sanctioned USER path to it post-setup.
+
+## Why it's an epic, not an option
+
+A mode change is a data-migration + provisioning + licensing operation with rollback safety — 6–10 tasks across Flutter **and** backend. Laid out so the architecture stays safe while we build the catalog/reports waves first.
+
+---
+
+## A. offline → online/hybrid (the upgrade — the hard direction)
+
+The terminal has been **catalog-authoritative** with a full local Drift DB. Going online makes the **back-office authoritative** — so this is a one-time hand-off of authority + a data push-up.
+
+1. **Pre-flight gate** — license/tier check (does the plan include cloud?), backend reachability, device→tenant binding + auth. Block with a clear reason if the tier doesn't include cloud (→ billing).
+2. **Tenant / database provisioning** — ensure the backend store/tenant exists; **create it if this is the first terminal** (the "create database" step). Backend: multi-tenant + billing modules.
+3. **Backup (rollback anchor)** — full local snapshot **before** touching anything. **Partly built:** POS-038 / FP-35-06 already takes pre-migration snapshots — reuse, don't rebuild.
+4. **Data migration push-up** — local catalog → backend, then orders/customers/sessions/cash drain up, reconciling client-uuid → server-id. **Reuses the existing sync machinery** (POS-074 drain, POS-076 customer reconcile, POS-080 adjustment drain — same parent-first, uuid→id pattern). This is the **one sanctioned exception** to [POS-083]'s "catalog never pushes up": steady-state hybrid never pushes catalog, but the *transition* does, exactly once.
+5. **Conflict resolution** — if the backend already holds data (another terminal provisioned it), reconcile: last-write-wins on `updated_at` for customers (existing policy), append-only for orders, and a manual review surface for catalog collisions (barcode/SKU clash).
+6. **Settings-authority handover** — keep-local vs adopt-back-office (this is what POS-008's "transition dialog" was reaching for; fold that intent here).
+7. **Commit** — flip mode via `setMode()`, switch catalog to read-only mirror, drop offline-only gates (cash/static-QR-only → full tenders).
+8. **Rollback** — any step fails → restore the pre-flight snapshot, stay offline. Never a half-migrated brick.
+
+## B. online/hybrid → offline (go standalone — the smaller direction)
+
+1. **Drain all pending sync** first — no orphaned unsynced orders/refunds/adjustments left on the server side of the fence.
+2. **Snapshot the backend catalog fully local** — so the terminal can become catalog-authoritative with a complete copy.
+3. **Flip** to offline; apply the offline license tier (cash/static-QR-only, local users — spec 35).
+
+## C. The switch UI
+
+A guarded migration **wizard** (progress, safe-cancel where reversible, explicit error/rollback states) launched from Settings — what *replaces* the deleted toggle. **Mockup-gated** (owner's Claude Design): it's a real multi-step screen, not chrome to invent.
+
+---
+
+## Architectural decisions (lock as we go)
+
+- **No naive `setMode()` user control, ever** — only this flow. (Enforced now by POS-087 + the guard test.)
+- **The one-time catalog push-up is a transition-only exception** to POS-083's local-authoritative/no-push rule. Future catalog/sync tasks must NOT assume "catalog never leaves the device" as an absolute — it leaves exactly once, here, under the migration.
+- **Rollback is mandatory and snapshot-based** (reuse POS-038 snapshots). No transition without a restore point.
+- **Reuse the sync drain** (POS-074/076/080), don't author a parallel push path.
+- **Licensing/provisioning is backend-gated** — the offline→online gate needs the licensing module + tenant provisioning endpoints (relates to the standing backend epic).
+
+## Already built / reusable (don't rebuild)
+
+- Pre-migration snapshots — POS-038 (FP-35-06).
+- Parent-first sync drain + client-uuid→server-id reconcile — POS-074, POS-076, POS-080.
+- `AppMode` enum + `setMode()` primitive + catalog-authority gating — `app_mode_service.dart`, `base_repository.dart` (POS-083).
+- Offline first-run + local users + license-stub — spec 35 wave.
+
+## Out of scope
+
+- **Competitor-data import** (Loyverse/MPOS/CSV) — that's [P27](../../features/P27-data-migration.md), a separate engine.
+- **Steady-state hybrid sync** — unchanged; this is the one-time transition only.
+- **Per-task dispatch prompts** — deferred (owner: build post-launch). When we build, decompose into Flutter FP-38-xx + the backend provisioning/migration endpoints.
+
+## Open questions (resolve at build time)
+
+- First-terminal vs Nth-terminal provisioning UX (who creates the tenant — the terminal, or the back-office before the terminal connects?).
+- Catalog-collision review: auto last-write-wins vs mandatory manual review for SKU/barcode clashes.
+- Can the offline→online migration run with the shop open, or is it a maintenance-window operation? (Affects whether mid-migration sales are buffered.)

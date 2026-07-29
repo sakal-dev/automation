@@ -34,7 +34,7 @@ import { execFileSync } from 'node:child_process'
 // the checker parses the spec with the same function the emitter emitted from.
 import {
   stripInlineComment, unquote, slug, anchorMatches, anchorMatchesText,
-  parseSourceURI, parseSpec, normWS, yamlUnquote, findDeclaration, findTestLabel,
+  parseSourceURI, parseSpec, FAMILIES, normWS, yamlUnquote, findDeclaration, findTestLabel,
 } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
@@ -200,6 +200,8 @@ function parseFencedACs(body, bodyStart, file) {
     if ((m = raw.match(/^-\s+ac:\s*(\S+)\s*$/))) { ac = { id: m[1], line, text: null, cites: [], citeOpen: false }; acs.push(ac); cite = null; return }
     if (!ac) return err(file, line, 'PARSE', `line belongs to no \`- ac:\` entry: "${raw.trim()}"`, 'the yaml block is a list of `- ac:` entries')
     if ((m = raw.match(/^\s+marker:\s*(.*)$/))) { ac.marker = yamlUnquote(m[1]); ac.markerLine = line; return }
+    if ((m = raw.match(/^\s+range:\s*(.*)$/))) { ac.range = yamlUnquote(m[1]); ac.rangeLine = line; return }
+    if ((m = raw.match(/^\s+tag:\s*(.*)$/))) { ac.tag = yamlUnquote(m[1]); ac.tagLine = line; return }
     if ((m = raw.match(/^\s+text:\s*(.*)$/))) { ac.text = yamlUnquote(m[1]); ac.textLine = line; return }
     if ((m = raw.match(/^\s+cite:\s*\[\s*\]\s*$/))) { ac.citeOpen = false; return }
     if ((m = raw.match(/^\s+cite:\s*$/))) { ac.citeOpen = true; return }
@@ -240,6 +242,14 @@ else {
   for (const k of ['project', 'target_host']) if (!cfg[k]) err(`${DIR}/config.yaml`, 1, 'REQUIRED', `\`${k}\` is required`, 'submit refuses to guess where to write')
   if (scope === 'app' && !cfg.app) err(`${DIR}/config.yaml`, cfg.scope?.line ?? 1, 'REQUIRED', '`app` is required when scope is app', 'it names which codebase these stories belong to')
 }
+
+// The spec-format family (SKA-026): prepare declared it; the fidelity gate
+// must parse the pinned spec with the SAME parameters or verbatim comparison
+// is meaningless. Unknown value = error; absent = reference.
+const famDecl = cfg.spec_family?.value ?? null
+if (famDecl && !FAMILIES[famDecl])
+  err(`${DIR}/config.yaml`, cfg.spec_family.line, 'SCOPE', `spec_family "${famDecl}" is not a known family (${Object.keys(FAMILIES).join(', ')})`, 'prepare writes this; fix the declaration')
+const FAM = FAMILIES[famDecl] ?? FAMILIES.reference
 
 // Project layer: local when scope=project; when scope=app it lives on the
 // server and submit is what checks the references against it.
@@ -305,19 +315,25 @@ const epicDocs = new Map()
     const key = fm.key?.value
     if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
     if (name !== `${key}.md`) err(f, fm.key.line, 'KEYFMT', `file is ${name} but key is "${key}"`, 'epic docs are named <KEY>.md')
-    for (const k of ['title', 'app', 'tier', 'priority'])
+    // Tier/Priority are family facts, not universals (storefront has neither,
+    // flutter-pos has no Tier) — required only where the spec carries them,
+    // which fidelity below checks. title/app are always prepare's to write.
+    for (const k of ['title', 'app'])
       if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on an epic doc`, 'prepare writes it from the spec header')
     if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
       err(f, fm.app.line, 'SCOPEAPP', `app "${fm.app.value}" is not this directory's app ("${cfg.app.value}")`, "an app-scoped .sakal/ carries only its own codebase's epic docs")
     epicDocs.set(key, f)
 
     const body = lines.slice(end + 1), bodyStart = end + 2
-    // The status header was the proven liar (E5). Never imported, ever.
+    // The status HEADER was the proven liar (E5) — its field lines never
+    // survive the import. Emoji inside imported section PROSE is different:
+    // as-built families carry it legitimately and fidelity requires it
+    // verbatim, so only status FIELD lines and checkbox lines are errors here.
     body.forEach((raw, i) => {
-      if (/🔴|🟢|🟡|\*\*Status:\*\*|\[x\]/.test(raw))
-        err(f, bodyStart + i, 'STATUSMARK', 'a status marker survived the import', 'status is derived — prepare never copies the `Status:` line or 🔴/🟢; delete it')
+      if (/^>?\s*\*\*Status:\*\*/.test(raw) || /^\*\*Priority:\*\*.*\*\*Status:\*\*/.test(raw) || /^\s*-\s+\[[^\]]*\]\s/.test(raw))
+        err(f, bodyStart + i, 'STATUSMARK', 'a status field line survived the import', 'status is derived — prepare never copies the `Status:` header/trailer or checkbox lines into an epic doc; delete it')
     })
-    const own = parseSpec(body.join('\n'))
+    const own = parseSpec(body.join('\n'), FAM, { epicKey: key })
     if (own.stories.length || body.some(l => /^##\s+Stories\s*$/.test(l)))
       err(f, bodyStart, 'PROJECTDEF', 'an epic doc must not carry a Stories section', 'stories live in stories/<EPIC>/<KEY>.md — the epic doc holds only the spec sections')
 
@@ -328,7 +344,15 @@ const epicDocs = new Map()
     const uri = parseSourceURI(srcVal)
     const r = resolvePinned(uri, f, fm.source.line, `epic ${key}`)
     if (!r.content) continue
-    const spec = parseSpec(r.content)
+    const spec = parseSpec(r.content, FAM, { epicKey: key })
+    // Tier/Priority: present exactly where the spec carries them, verbatim.
+    for (const k of ['tier', 'priority']) {
+      const specVal = spec[k]
+      if (specVal != null && !fm[k]?.value) err(f, fm.key.line, 'FIDELITY', `the spec ${r.how} carries \`${k}: ${specVal}\` but this epic doc drops it`, 're-run prepare')
+      else if (specVal == null && fm[k]?.value) err(f, fm[k].line, 'FIDELITY', `\`${k}\` is not in the spec ${r.how} — an epic doc invents nothing`, 're-run prepare')
+      else if (specVal != null && fm[k]?.value && normWS(fm[k].value) !== normWS(specVal))
+        err(f, fm[k].line, 'FIDELITY', `\`${k}\` differs from the spec ${r.how} ("${specVal}")`, 'values are verbatim, qualifiers included')
+    }
     const specSections = new Map(spec.sections.map(s => [normWS(s.heading), s]))
     const ownHeadings = new Set()
     for (const s of own.sections) {
@@ -449,7 +473,7 @@ for (const p of walk(join(dirAbs, 'stories'))) {
           if (!am.hit) err(f, fm.source.line, 'SRCANCHOR', `source resolves ${r.how} but has no section starting "#${uri.anchor}"`, `headings found: ${am.known.slice(0, 4).join(', ') || '(none)'}…`)
           else if (am.duplicate) warn(f, fm.source.line, 'SRCDUP', `"#${uri.anchor}" matches more than one heading in ${uri.path}`, 'disambiguate the heading or the anchor')
         }
-        const st = parseSpec(r.content).stories.find(s => s.key === key)
+        const st = parseSpec(r.content, FAM, { epicKey: fm.epic?.value ?? key.replace(/-\d{2}$/, '') }).stories.find(s => s.key === key)
         if (!st) err(f, fm.source.line, 'FIDELITY', `story ${key} has no section in ${uri.path} ${r.how}`, 'the spec moved on, or the key changed — re-run prepare')
         else {
           if (st.acs.length !== acs) err(f, bodyStart, 'FIDELITY', `story ${key} carries ${acs} ACs but the spec section ${r.how} has ${st.acs.length}`, 'the yaml block mirrors the spec AC-for-AC, in order — re-run prepare')
@@ -465,6 +489,17 @@ for (const p of walk(join(dirAbs, 'stories'))) {
               err(f, ac.markerLine ?? ac.line, 'FIDELITY', `${ac.id} marker ${JSON.stringify(ac.marker)} is not the spec's raw marker ${JSON.stringify(sp.marker)} ${r.how}`, 'markers are captured verbatim and never interpreted (S2)')
             else if (ac.marker == null && sp.marker && sp.marker !== '[ ]')
               err(f, ac.line, 'FIDELITY', `${ac.id} drops the spec's raw marker ${JSON.stringify(sp.marker)} ${r.how}`, 'a non-default checkbox marker is data someone wrote — carried as `marker:`, never interpreted (S2)')
+            // Collapsed ranges (flutter-pos `AC-1–AC-5`): one physical line,
+            // one entry, the raw range carried — verbatim both directions.
+            if (ac.range != null && normWS(ac.range) !== normWS(sp.rangeRaw ?? ''))
+              err(f, ac.rangeLine ?? ac.line, 'FIDELITY', `${ac.id} range ${JSON.stringify(ac.range)} is not the spec's ${JSON.stringify(sp.rangeRaw)} ${r.how}`, 'ranges are recorded raw; splitting them is promote-time work')
+            else if (ac.range == null && sp.rangeRaw)
+              err(f, ac.line, 'FIDELITY', `${ac.id} drops the spec's collapsed range ${JSON.stringify(sp.rangeRaw)} ${r.how}`, 'one physical line = one entry with `range:` carried raw')
+            // Italic label tags (`*(amended)*` …): recorded raw, both ways.
+            if (ac.tag != null && normWS(ac.tag) !== normWS(sp.tagRaw ?? ''))
+              err(f, ac.tagLine ?? ac.line, 'FIDELITY', `${ac.id} tag ${JSON.stringify(ac.tag)} is not the spec's ${JSON.stringify(sp.tagRaw)} ${r.how}`, 'label tags are recorded raw, never interpreted')
+            else if (ac.tag == null && sp.tagRaw)
+              err(f, ac.line, 'FIDELITY', `${ac.id} drops the spec's label tag ${JSON.stringify(sp.tagRaw)} ${r.how}`, 'carried as `tag:`, never interpreted')
           })
           if (fm.title?.value && normWS(fm.title.value) !== normWS(st.title))
             warn(f, fm.title.line, 'FIDELITY', `title differs from the spec heading ("${st.title}")`, 'titles are authored from the heading; drift is worth a look')

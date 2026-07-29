@@ -46,17 +46,30 @@ and the app profile.
    tooling (`tool/*.sh`, CLAUDE.md). It lands in `config.yaml` as the
    `app_profile:` block; submit maps it to the SKM-034 apps columns.
 5. **Run the emitter** — it owns every byte that lands in `.sakal/`:
-   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-prepare.mjs --cites <cites.json> --profile <profile.json>`
-   - It pins HEAD (one pin per run), emits `epics/<KEY>.md` (verbatim spec
-     sections, no status markers), `stories/<EPIC>/<KEY>.md` (fenced-yaml ACs,
-     VERBATIM text, raw non-default markers), `proposals/consumes-raw.yaml`,
-     and the findings.md status-voices block.
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-prepare.mjs --cites <cites.json> --profile <profile.json> [--seed <seed.json>] [--family <name>]`
+   - It pins HEAD (one pin per run) and REFUSES if any spec file differs from
+     the pin — commit spec edits first; the pin must be truthful.
+   - **Spec-format family** (D-01): `reference` · `greenfield` · `asbuilt` ·
+     `legacyflat` — one parser, per-family parameters. Resolution: `--family`
+     > config `spec_family:` > unanimous header signal > reference; the
+     resolved family is declared back into config.yaml so verify's fidelity
+     gate parses identically. A header signal contradicting the declaration
+     is a refusal naming both — never a guess.
+   - `--seed` supplies journey/persona/module for a FRESH tree (model
+     judgment, per story key); an existing story file always wins over it.
+   - It emits `epics/<KEY>.md` (verbatim spec sections, no status-field
+     lines), `stories/<EPIC>/<KEY>.md` (fenced-yaml ACs, VERBATIM text, raw
+     non-default `marker:`/`range:`/`tag:` fields), `proposals/consumes-raw.yaml`
+     (verbatim Consumes/Implements/Journey(s) keys — integer journey indices
+     resolve by index at promote time), and the findings.md status-voices
+     block (every voice quoted, contradictions named, nothing chosen).
    - **Exit 2 with "S1 loud-fail" → STOP and show the refusal verbatim.** The
-     spec family has AC-like lines the extractor does not parse; extracting
-     past them would silently drop ACs. That family belongs to SKA-026 —
-     never hand-extract around the refusal.
+     declared family does not parse some AC-like lines; extracting past them
+     would silently drop ACs. Fix the declaration or the spec — never
+     hand-extract around the refusal.
    - Show the prepare report as-is: uncited ACs with reasons, dropped cites,
-     new/orphan stories, unresolvable-imported references.
+     new/orphan/voiceless stories, uncarried story-body lines,
+     unresolvable-imported references.
 6. **Reference the project layer by key — never re-draft it.** New
    project-layer needs go to `.sakal/proposals/` with a note — acknowledged by
    verify, never submitted, carried to the spec-home by a human.

@@ -3,6 +3,48 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.7.0 — all four spec-format families (SKA-026 · D-01 survey)
+
+`/sakal-onboard-app` now extracts every surveyed spec set — ONE parser,
+per-family parameters, never four parsers. 0.6.0's S1 loud-fail remains the
+backstop; this release adds the capability half.
+
+- **Families:** `reference` (owner, kiosk, stock, kds) · `greenfield`
+  (driver, agent — no story triple; `Journey(s):` integer indices captured
+  verbatim, resolved by index at promote time, never lettered) · `asbuilt`
+  (storefront, garage — checkbox-as-evidence markers incl. `[~]`/`[🟡]`/
+  `✅`-suffixes, wrapped 2–5-line headers, single-line triples, AC text
+  continuations) · `legacyflat` (flutter-pos — epic key from the
+  `Story prefix:` header, `05b`→`FP-05B`, collapsed `AC-1–AC-5` ranges and
+  italic label tags carried raw as `range:`/`tag:`, unlabeled checkbox ACs,
+  split/absent trailers reported as gaps).
+- **Detection with refusal, never a guess:** `--family` > config
+  `spec_family:` > unanimous header signal > reference. A header signal
+  contradicting the declaration refuses naming both candidates; the resolved
+  family is declared into config.yaml so verify's fidelity gate parses with
+  identical parameters.
+- **The pin must be truthful:** prepare refuses when any spec file differs
+  from HEAD (uncommitted edits would make every `@sha` source line a lie).
+- **`--seed`** supplies journey/persona/module for a fresh tree (model
+  judgment, per story); an existing story file always wins.
+- **S-rules unweakened across families:** raw markers (never interpreted,
+  never citations), no fabricated triples (voiceless stories warn, naming
+  the human work), verbatim consumes capture (now incl. story-level
+  `Implements:` lines), status voices quoted — plus the fifth voice, in-text
+  AC status emoji, with checkbox-vs-text contradictions named.
+- **Golden suite at the D-01 named minimum:** snapshots of stock, agent,
+  storefront, garage, flutter-pos (owner kept; kiosk/kds covered by
+  construction), machinery-generated human-reviewed expected outputs,
+  wrong-family forcing refusals, per-family determinism, README/table
+  non-derivation asserted. 84 golden + 51 shared tests.
+- Tier/Priority are emitted only where the spec carries them, VERBATIM with
+  qualifiers (`P0/P1`, `MVP (car care + garage)`, multi-sentence Priority);
+  story tags take the leading `P<d>` token; epic-doc STATUSMARK narrowed to
+  status FIELD lines so imported as-built prose can be verbatim.
+- Live-run proof: garage-flutter extracted to a verified-green tree (13
+  epics, 48 stories, 0 errors; 46 grep-confirmed cite'd ACs, 143 honest
+  gaps with reasons; two runs byte-identical across 64 files).
+
 ## 0.6.0 — the plugin owns the emission (SKA-025 · Addenda A1 + A2)
 
 The app-layer re-extract is now **code**, not chat-agent hand-work
