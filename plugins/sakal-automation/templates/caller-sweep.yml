@@ -31,6 +31,12 @@ jobs:
   sweep:
     uses: sakal-dev/automation/.github/workflows/sweep.yml@v2
     with:
+      # WHICH SakalMaster this talks to. Leave the variable UNSET (the normal
+      # case) and it resolves to production. Only the platform's own repos set
+      # the repository variable SAKAL_ENV=staging — so this line is byte-identical
+      # in every repo and changing environment is a settings change, not a commit.
+      # (Evaluated in THIS repo, so the caller's own variables are what count.)
+      sakal_env: ${{ vars.SAKAL_ENV }}
       extra_instructions: |
         <EXTRA_INSTRUCTIONS>
     secrets: inherit

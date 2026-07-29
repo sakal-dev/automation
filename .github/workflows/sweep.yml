@@ -86,14 +86,18 @@ on:
       # exchange (the server maps the GitHub-signed repository claim), which
       # ENFORCES invariant 4 rather than configuring it. The PAT fallback
       # inputs exist for completeness; Actions callers should not set them.
+      sakal_env:
+        description: "production | staging. Empty resolves to PRODUCTION. Callers pass ${{ vars.SAKAL_ENV }}; only platform repos set that variable."
+        type: string
+        default: ""
       sakal_supabase_url:
-        description: SakalMaster SUPABASE project URL (PRODUCTION by default; set sakal_env=staging or override for self-hosted)
+        description: SakalMaster SUPABASE project URL (self-hosted escape hatch. Leave empty and sakal_env decides.)
         type: string
-        default: "https://gubehzbezjkkszhwjjnj.supabase.co"
+        default: ""
       sakal_supabase_publishable_key:
-        description: Supabase publishable key (public; PRODUCTION by default)
+        description: Supabase publishable key (public; self-hosted escape hatch, set with the URL)
         type: string
-        default: "sb_publishable_jQKMbs0FhRirLJ4t7Rrcag__iBdcD0G"
+        default: ""
       project:
         description: "PAT path only — the OIDC exchange returns it"
         type: string
@@ -123,6 +127,19 @@ jobs:
       id-token: write
       actions: write
     steps:
+      # The environment is named in ONE place (actions/resolve-env). Four copies
+      # of it is how staging became every customer's default; this is the fix to
+      # the shape, not just the values. It also PRINTS the resolved environment,
+      # because the override lives in a repo variable and is therefore invisible
+      # in this repo's code — a run log must still answer "which SakalMaster?".
+      - name: Resolve SakalMaster environment
+        id: env
+        uses: sakal-dev/automation/actions/resolve-env@v2
+        with:
+          sakal_env: ${{ inputs.sakal_env }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
+
       # Cheap gate (no checkout, just the API): is there any actionable
       # claude-ready issue (not blocked, not being worked)? If not, every
       # heavy step below is skipped, so an idle scheduled run costs ~seconds.
@@ -153,8 +170,8 @@ jobs:
         if: ${{ inputs.source == 'sakalmaster' }}
         uses: sakal-dev/automation/actions/claim-sakal@v2
         with:
-          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
-          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
+          sakal_supabase_url: ${{ steps.env.outputs.url }}
+          sakal_supabase_publishable_key: ${{ steps.env.outputs.publishable_key }}
           project: ${{ inputs.project }}
           app: ${{ inputs.app }}
           source: github-sweep
@@ -342,8 +359,8 @@ jobs:
         id: sbrief
         if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' }}
         env:
-          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
           PAT: ${{ secrets.SAKAL_TOKEN }}
           PROJECT: ${{ steps.sclaim.outputs.project }}
           STORY: ${{ steps.sclaim.outputs.story_key }}
@@ -425,8 +442,8 @@ jobs:
         id: sjudge
         if: ${{ always() && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' }}
         env:
-          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
           PAT: ${{ secrets.SAKAL_TOKEN }}
           PROJECT: ${{ steps.sclaim.outputs.project }}
           RUN_ID: ${{ steps.sclaim.outputs.run_id }}

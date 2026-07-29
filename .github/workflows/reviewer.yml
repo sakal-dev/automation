@@ -109,14 +109,18 @@ on:
         description: Runner label
         type: string
         default: ubuntu-latest
+      sakal_env:
+        description: "production | staging. Empty resolves to PRODUCTION. Callers pass ${{ vars.SAKAL_ENV }}; only platform repos set that variable."
+        type: string
+        default: ""
       sakal_supabase_url:
         description: SakalMaster SUPABASE project URL
         type: string
-        default: "https://gubehzbezjkkszhwjjnj.supabase.co"
+        default: ""
       sakal_supabase_publishable_key:
         description: Supabase publishable key (public)
         type: string
-        default: "sb_publishable_jQKMbs0FhRirLJ4t7Rrcag__iBdcD0G"
+        default: ""
 
 jobs:
   review:
@@ -130,6 +134,19 @@ jobs:
       issues: write
       id-token: write
     steps:
+      # The environment is named in ONE place (actions/resolve-env). Four copies
+      # of it is how staging became every customer's default; this is the fix to
+      # the shape, not just the values. It also PRINTS the resolved environment,
+      # because the override lives in a repo variable and is therefore invisible
+      # in this repo's code — a run log must still answer "which SakalMaster?".
+      - name: Resolve SakalMaster environment
+        id: env
+        uses: sakal-dev/automation/actions/resolve-env@v2
+        with:
+          sakal_env: ${{ inputs.sakal_env }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
+
       # --- The reviewer's credential. Resolved FIRST, because everything after
       # it is meaningless if the wrong account is about to speak. ------------
       - name: Resolve the reviewer identity
@@ -137,8 +154,8 @@ jobs:
         env:
           SRC: ${{ inputs.source }}
           KIND_IN: ${{ inputs.reviewer_kind }}
-          SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
-          ANON: ${{ inputs.sakal_supabase_publishable_key }}
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
         run: |
           set -uo pipefail
           kind="$KIND_IN"

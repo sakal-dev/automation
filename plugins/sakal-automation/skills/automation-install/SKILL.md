@@ -69,8 +69,13 @@ Branch: `automation/onboard`. Order matters only for the approval pause.
    `claude-done.yml`, `ci.yaml` — skip `ci.yaml` if the repo already has a CI
    workflow; instead tell the user to make its gate job run `./tool/verify.sh`
    and note the check-name input). Substitute `<M>`; `<CI_WORKFLOW_NAME>` =
-   the CI workflow's `name:`; drop the sweep's `with:` block unless the repo
-   has a status ledger to point at (`<EXTRA_INSTRUCTIONS>`).
+   the CI workflow's `name:`; drop only the `extra_instructions:` entry unless
+   the repo has a status ledger to point at (`<EXTRA_INSTRUCTIONS>`).
+   **Keep `sakal_env: ${{ vars.SAKAL_ENV }}` exactly as written, in every repo.**
+   Unset (which is every customer repo) it resolves to PRODUCTION; the line is
+   byte-identical everywhere so there is nothing per-repo to get wrong, and
+   changing a repo's environment later is a settings change rather than a PR.
+   Only the platform's own repos set the `SAKAL_ENV` repository variable.
 3. **Labels** (idempotent): `bash $AUTO/labels.sh <owner/name>`, then
    `gh label create "area:<m>" -R <owner/name> --force --color C5DEF5` per Q2
    module.
