@@ -266,7 +266,7 @@ console.log('\n── submit-plan writes summary + degradation contract')
   // P-M1 (SKA-033): the orphan report — server has X; tree does not.
   wf(join(tmp, 'server2.json'), JSON.stringify({ project: 'p', apps: ['a'], epics: ['XX-01', 'XX-99'], journeys: ['XX-J1', 'XX-J9'], personas: [], modules: [], stories: ['spec:a:XX-01-01', 'spec:a:XX-77-01'] }))
   const out2 = JSON.parse(execFileSync('node', [join(here, '../../lib/sakal-plan.mjs'), '--dir', D, '--server', join(tmp, 'server2.json'), '--json'], { encoding: 'utf8' }))
-  eq(JSON.stringify(out2.orphans), JSON.stringify({ stories: ['spec:a:XX-77-01'], epics: ['XX-99'], journeys: ['XX-J9'] }), 'orphans per entity kind: stories by app namespace, epics/journeys by project')
+  eq(JSON.stringify(out2.orphans), JSON.stringify({ stories: ['spec:a:XX-77-01'], epics: ['XX-99'], journeys: ['XX-J9'], appShells: [] }), 'orphans per entity kind: stories by app namespace, epics/journeys by project')
 
   // P-M3/M4/M5 (SKA-033): the baseline receipt and its gates.
   const { spawnSync } = await import('node:child_process')
@@ -330,6 +330,37 @@ console.log('\n── submit-plan writes summary + degradation contract')
   // submit-log: append-only, terse, deterministic given --ts
   const log1 = readFileSync(join(D, 'submit-log.md'), 'utf8')
   eq(/## 2026-07-30T12:00:00Z\n- stories 1 acked: XX-01-01\n- mappings confirmed: XX-01-01-b=XX-01-01-a/.test(log1), true, 'submit-log entry: one line per write family + mappings, timestamped')
+  // ── SKA-035: identity is read or refused, never inherited ──
+  const idcli = (dir, srv, extra = []) => spawnSync('node', [join(here, '../../lib/sakal-identity.mjs'), '--dir', dir, '--server', srv, '--repo-root', tmp, ...extra], { encoding: 'utf8' })
+  const srvFile = (name, o) => { const p = join(tmp, name); wf(p, JSON.stringify(o)); return p }
+  const APP = { key: 'my-app', github_repo: 'org/my-repo' }
+  wf(join(D, 'config.yaml'), 'format_version: 1\nscope: app\nproject: p\napp: my-app\ntarget_host: https://h.example\n')
+  execFileSync('git', ['-C', tmp, 'init', '-q'])
+  execFileSync('git', ['-C', tmp, 'remote', 'add', 'origin', 'https://github.com/org/my-repo.git'])
+  const okSrv = srvFile('id-ok.json', { host: 'https://h.example', project: 'p', apps: [APP] })
+  const r1 = idcli(D, okSrv)
+  eq(r1.status === 0 && /matched by key\+repo: my-app/.test(r1.stdout), true, 'F-5: both axes match → converge, naming the axis')
+  const r2 = idcli(D, srvFile('id-host.json', { host: 'https://other.example', project: 'p', apps: [APP] }))
+  eq(r2.status === 1 && /HOST MISMATCH/.test(r2.stdout) && /SPLIT THE BRAIN/.test(r2.stdout), true, 'F-3: host mismatch REFUSES naming both values and the risk')
+  const r3 = idcli(D, srvFile('id-conflict.json', { host: 'https://h.example', project: 'p', apps: [{ key: 'my-app', github_repo: 'org/elsewhere' }, { key: 'other', github_repo: 'org/my-repo' }] }))
+  eq(r3.status === 1 && /APP IDENTITY CONFLICT/.test(r3.stdout), true, 'F-5: key→A vs repo→B CONFLICT refuses with both, never picks')
+  const r4 = idcli(D, srvFile('id-drift.json', { host: 'https://h.example', project: 'p', apps: [{ key: 'my-app', github_repo: 'org/moved' }] }))
+  eq(r4.status === 1 && /ORIGIN DRIFT/.test(r4.stdout), true, 'F-5: origin drift refuses — origin never wins by default')
+  const r5 = idcli(D, srvFile('id-none.json', { host: 'https://h.example', project: 'p', apps: [{ key: 'someone-else', github_repo: 'org/nope' }] }))
+  eq(r5.status === 1 && /Creation is NEVER silent/.test(r5.stdout) && /SURFACE NAMES/.test(r5.stdout), true, 'F-5: no match → show-and-ask creation, keys are surface names')
+  const r6 = idcli(D, srvFile('id-repoaxis.json', { host: 'https://h.example', project: 'p', apps: [{ key: 'org/my-repo', github_repo: 'org/my-repo' }] }))
+  eq(r6.status === 1 && /REPO axis/.test(r6.stdout), true, 'F-5: repo-axis-only match converges onto that row (the garage shell case), asking first')
+  wf(join(D, 'config.yaml'), 'format_version: 1\nscope: app\nproject: FILL-AT-SUBMIT\napp: my-app\ntarget_host: FILL-AT-SUBMIT\n')
+  const r7 = idcli(D, okSrv)
+  eq(r7.status === 1 && /NEVER inherited/.test(r7.stdout) && /cannot ask/.test(r7.stdout), true, 'F-3: FILL-AT-SUBMIT + connection = show-and-ask; non-interactive hands over the command')
+  eq(idcli(D, okSrv, ['--adopt']).status, 0, '--adopt records the operator answer')
+  eq(/target_host: https:\/\/h\.example/.test(readFileSync(join(D, 'config.yaml'), 'utf8')), true, 'identity persisted into config.yaml on first success (F-3a)')
+  eq(idcli(D, okSrv).status, 0, 'thereafter it stands down — and a different host would now refuse')
+  // F-4: an UNREAD set never blocks; an app shell shows in the orphan report.
+  const p4 = JSON.parse(execFileSync('node', [join(here, '../../lib/sakal-plan.mjs'), '--dir', D, '--server', srvFile('id-f4.json', { host: 'https://h.example', project: 'p', apps: [APP, { key: 'org/legacy-shell', github_repo: 'org/legacy-shell' }], stories: [] }), '--json'], { encoding: 'utf8' }))
+  eq(p4.blocked.length, 0, 'F-4: unread epics/journeys/personas/modules block nothing — an unread set is not an empty server')
+  eq(p4.orphans.appShells.join(','), 'org/legacy-shell', 'F-5c: repo-name app shells surface in the orphan report')
+
   base(['--log', 'refusal: three-way (test)', '--ts', '2026-07-30T12:01:00Z'])
   const log2 = readFileSync(join(D, 'submit-log.md'), 'utf8')
   eq(log2.startsWith(log1), true, 'the log is append-only')

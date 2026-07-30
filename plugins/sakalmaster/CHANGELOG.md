@@ -3,6 +3,36 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.14.0 — identity is read or refused, never defaulted (SKA-035 · F-3/F-4/F-5)
+
+The named disease: an identity decision made without a read path,
+defaulting to ACTION instead of REFUSAL. Host came from session state,
+apps from create-on-miss, references from assumption. Each is now a read
+or a refusal.
+
+- **New: `lib/sakal-identity.mjs`.** **F-3 (host):** config `target_host`
+  is the declaration and the truth — a connected server that differs
+  REFUSES, naming both values and the split-brain risk; the only fix is
+  editing the config. `FILL-AT-SUBMIT` + a connection is a SHOW-AND-ASK,
+  never an inherit; `--adopt` records host/project/project_id on first
+  success, enforced thereafter. **F-5 (apps):** two match axes — declared
+  key and the tree's git origin vs `apps.github_repo` — before any create
+  verdict; either hits → converge naming the axis; both hit different rows
+  → CONFLICT refusal; the app linked to this repo under a different key →
+  converge on the repo axis (the garage shell case) after asking; neither
+  → SHOW-AND-ASK, creation is never silent. Keys are SURFACE NAMES.
+  ORIGIN DRIFT (config app linked elsewhere) refuses: a moved remote and a
+  wrong declaration are indistinguishable from here, so the operator
+  decides. Non-interactive sessions refuse with the command to run.
+- **F-4 consumption:** the planner blocks a story only on sets the caller
+  actually READ (`list_registry` · `list_journeys` · `list_epics`) and
+  names the unread ones — an unread set is not an empty server, and the
+  false "not in SakalMaster yet" refusals end. `apps` accepts
+  `{key, github_repo}` rows.
+- **Orphan report** gains repo-name **app shells**, pointing at the in-app
+  delete (move the repo link and Agent profile off the shell first, or it
+  rightly refuses). Deletion stays a human act.
+
 ## 0.13.0 — the permanent mutation design (SKA-034 · D02-R2)
 
 - **P-M3, permanent, as amended:** on a CONFIRMED AC-set change, content

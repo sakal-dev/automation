@@ -34,23 +34,35 @@ for (const p of walk(join(DIR, 'stories'))) {
   const g = k => { const m = t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')); return m ? stripInlineComment(m[1]) : undefined }
   stories.push({ file: relative(DIR, p), key: g('key'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module'), hasSource: /^source:\s*\S/m.test(t) })
 }
-const on = { epic: new Set(server.epics ?? []), journey: new Set(server.journeys ?? []),
-  persona: new Set(server.personas ?? []), module: new Set(server.modules ?? []), story: new Set(server.stories ?? []) }
+// F-4 (SKA-035): every reference kind now HAS a list tool server-side
+// (list_registry · list_journeys · list_epics). An absent set in the state
+// file is therefore "the caller did not read it", NOT "the server holds
+// none" — and blocking a story on an unread set is the false-refusal hole.
+// `apps` may arrive as keys or as {key, github_repo} rows (list_registry).
+const keysOf = v => (v ?? []).map(x => typeof x === 'string' ? x : x.key)
+const supplied = k => Array.isArray(server[k])
+const on = { epic: new Set(keysOf(server.epics)), journey: new Set(keysOf(server.journeys)),
+  persona: new Set(keysOf(server.personas)), module: new Set(keysOf(server.modules)), story: new Set(keysOf(server.stories)) }
+const unread = ['epics', 'journeys', 'personas', 'modules'].filter(k => !supplied(k))
 
 // THE DECLARATION IS A CLAIM; here is where it is checked.
 const declProblems = []
 if (!ns) declProblems.push(`${DIR}/config.yaml: no project/app key declared — submit cannot resolve a target`)
 else if (server.project && cfg('project') && server.project !== cfg('project'))
   declProblems.push(`${DIR}/config.yaml: declares project "${cfg('project')}" but the server resolved "${server.project}" — fix the declaration, nothing was written`)
-if (cfg('app') && (server.apps ?? []).length && !(server.apps ?? []).includes(cfg('app')))
-  declProblems.push(`${DIR}/config.yaml: declares app "${cfg('app')}", which is not a codebase in this project — link it, or fix the key`)
+// App identity is resolved by lib/sakal-identity.mjs (F-5: key AND repo
+// axes, conflict refusal, show-and-ask creation) — the planner only notes
+// that the declared key is unknown to the read-back, and points there.
+if (cfg('app') && supplied('apps') && keysOf(server.apps).length && !keysOf(server.apps).includes(cfg('app')))
+  declProblems.push(`${DIR}/config.yaml: declares app "${cfg('app')}", which no read-back row carries by KEY — run lib/sakal-identity.mjs (it also matches by linked repo, and refuses rather than creating silently)`)
 
 const inS = f => !SCOPE || f.includes(SCOPE.replace(/^\.\//, ''))
 const ready = [], blocked = [], already = []
 for (const s of stories.filter(s => inS(s.file))) {
   if (on.story.has(`spec:${ns}:${s.key}`)) { already.push(s); continue }
   const miss = [['epic', s.epic], ['journey', s.journey], ['persona', s.persona], ['module', s.module]]
-    .filter(([f, v]) => v && !on[f].has(v))
+    // Only a set the caller actually READ can block a story.
+    .filter(([f, v]) => v && supplied(`${f}s`) && !on[f].has(v))
   if (miss.length) {
     const [f, v] = miss[0]
     blocked.push({ ...s, why: `${s.key} references ${f} ${v}, which is not in SakalMaster yet — submit ${f === 'epic' ? 'epics.yaml' : f === 'journey' ? 'journeys.yaml' : `registry/${f}s.yaml`} first` })
@@ -91,10 +103,18 @@ for (const y of [['epics.yaml', treeEpicKeys], ['journeys.yaml', treeJourneyKeys
   const p = join(DIR, y[0])
   if (existsSync(p)) for (const m of readFileSync(p, 'utf8').matchAll(/^\s*-\s+(\S+)\s+—/gm)) y[1].add(m[1])
 }
+// App shells (F-5c): keys are SURFACE NAMES; a row whose key is a repo name
+// (owner/repo, or a key matching no tree while another row holds this repo)
+// is the wrong convention and becomes an orphan under the mutation contract.
+const declaredApp = cfg('app')
+const appRows = supplied('apps') ? (server.apps ?? []).map(a => typeof a === 'string' ? { key: a, github_repo: null } : a) : []
 const orphans = {
   stories: drift.onlyServer,
-  epics: (server.epics ?? []).filter(k => !treeEpicKeys.has(k)),
-  journeys: (server.journeys ?? []).filter(k => !treeJourneyKeys.has(k)),
+  epics: keysOf(server.epics).filter(k => !treeEpicKeys.has(k)),
+  journeys: keysOf(server.journeys).filter(k => !treeJourneyKeys.has(k)),
+  appShells: declaredApp
+    ? appRows.filter(a => a.key !== declaredApp && /^[^/]+\/[^/]+$/.test(a.key)).map(a => a.key)
+    : [],
 }
 
 if (JSON_OUT) { console.log(JSON.stringify({ ok: !declProblems.length, declProblems, ready, blocked, already, drift, writes, orphans }, null, 2)); process.exit(declProblems.length ? 1 : 0) }
@@ -117,11 +137,14 @@ console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just t
 if (!drift.onlyLocal.length && !drift.onlyServer.length) console.log('    none — files and SakalMaster agree')
 if (drift.onlyLocal.length) console.log(`    ${drift.onlyLocal.length} in files, NOT yet in SakalMaster: ${drift.onlyLocal.join(', ')}`)
 if (drift.onlyServer.length) { console.log(`    ${drift.onlyServer.length} in SakalMaster, NOT in files: ${drift.onlyServer.join(', ')}`); console.log('      ↳ someone edited in-app, or a story left the files. Submit will NOT delete these.') }
-if (orphans.stories.length || orphans.epics.length || orphans.journeys.length) {
+if (orphans.stories.length || orphans.epics.length || orphans.journeys.length || orphans.appShells.length) {
   console.log(`\n  ORPHANS (P-M1) — a record the tree stopped naming is a claimable ghost; deletion stays a human act:`)
   for (const k of orphans.stories) console.log(`    server has story ${k}; tree does not`)
   for (const k of orphans.epics) console.log(`    server has epic ${k}; tree does not`)
   for (const k of orphans.journeys) console.log(`    server has journey ${k}; tree does not`)
+  for (const k of orphans.appShells) console.log(`    server has app ${k} (a REPO-NAME shell — keys are surface names); no tree declares it`)
+  if (orphans.appShells.length) console.log('      ↳ delete shells IN THE APP (it refuses while anything real references them): move the repo link (set_app_repo) and the Agent profile off the shell first.')
   console.log('      ↳ a key rename/split needs an operator DECISION RECORD before re-submit (CONVENTIONS.md) — this report is the tripwire.')
 }
+if (unread.length) console.log(`\n  NOT READ BACK: ${unread.join(', ')} — these sets were not supplied, so nothing was blocked on them (F-4).\n    A connected caller reads list_registry · list_journeys · list_epics; an unread set is not an empty server.`)
 console.log()

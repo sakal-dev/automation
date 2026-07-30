@@ -33,11 +33,36 @@ command that guesses is a command that surprises.
    files change. Run the same verifier `/sakal-verify` runs, locally:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-verify.mjs --json [--scope <sel>]`
    Any error in scope → refuse, show the first three, stop.
+1a. **Resolve IDENTITY before anything else** (SKA-035) — host and app are
+   READ or REFUSED, never inherited from session state:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-identity.mjs --server <tmp> [--adopt]`
+   Include the connected `host` (and `project_id`) in the read-back you
+   write to `<tmp>`, plus `apps` as `{key, github_repo}` rows from
+   `sakal_list_registry` — the resolver needs both axes.
+   - Exit 1 → print it VERBATIM and STOP. It refuses a host mismatch (the
+     declaration is the truth; a mismatch would SPLIT THE BRAIN), a
+     project mismatch, an app-identity CONFLICT (key→row A, repo→row B),
+     and ORIGIN DRIFT (a moved remote and a wrong declaration look
+     identical from here — the operator decides, origin never wins by
+     default).
+   - `FILL-AT-SUBMIT` + a connected server is a SHOW-AND-ASK, never an
+     inherit: confirm with the operator, then `--adopt` records host,
+     project and project_id into config.yaml — written once, enforced
+     after.
+   - **No app matches either axis → SHOW-AND-ASK, never silent creation.**
+     App keys are SURFACE NAMES (`garage-flutter`), not repo names.
+     Matched by the repo axis under a different key → converge onto that
+     row and say which axis matched.
+   - Non-interactive session → refuse and hand over the exact command to
+     run interactively; never guess an identity to keep moving.
 1b. **Read SakalMaster back and check the declaration**, which prepare only
    claimed: write the read-back to a temp file and run
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-plan.mjs --server <tmp> [--scope <sel>]`.
    It refuses with a `config.yaml` message if the declared project or app does
-   not resolve — **before any write**.
+   not resolve — **before any write**. Supply every set you can read
+   (`sakal_list_registry` · `sakal_list_journeys` · `sakal_list_epics`): a
+   set you did NOT read is not an empty server, and the planner only blocks
+   a story on sets actually supplied (F-4). It says which sets were unread.
 1c. **Run the mutation gates** (SKA-033) — refusals are code, not care:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --check [--server <tmp>]`
    - Exit 1 → show the refusal VERBATIM and stop. The gates, ONE refusal at
