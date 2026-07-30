@@ -230,5 +230,32 @@ console.log('\n── journey records (frontmatter + verbatim narrative)')
   eq(idx.length === 1 && idx[0].key === 'OA-J1' && idx[0].fields.source === 'specs/x.md#journey-a', true, 'index entries parse: key, label, fields')
 }
 
+// ── SKA-029: the submit plan names the three new writes; degradation is a
+// documented contract, per-field, never all-or-nothing ──────────────────────
+console.log('\n── submit-plan writes summary + degradation contract')
+{
+  const { execFileSync } = await import('node:child_process')
+  const { mkdtempSync, mkdirSync: mkd, writeFileSync: wf, rmSync } = await import('node:fs')
+  const os = await import('node:os')
+  const tmp = mkdtempSync(join(os.tmpdir(), 'sakal-plan-e2e-'))
+  const D = join(tmp, '.sakal')
+  mkd(join(D, 'stories/XX-01'), { recursive: true }); mkd(join(D, 'epics'), { recursive: true }); mkd(join(D, 'journeys'), { recursive: true })
+  wf(join(D, 'config.yaml'), 'format_version: 1\nscope: app\nproject: p\napp: a\ntarget_host: h\napp_profile:\n  setup_cmd: ./tool/setup.sh\n  verify_cmd: ./tool/verify.sh\n')
+  wf(join(D, 'stories/XX-01/XX-01-01.md'), '---\nkey: XX-01-01\ntitle: T\nepic: XX-01\npersona: p\napp: a\nmodule: m\nsource: o/r:docs/specs/x.md#a@abc1234\n---\n\nAs a p, I want x, so that y.\n\n## Acceptance criteria\n\n```yaml\n- ac: XX-01-01-a\n  text: "claim"\n  cite: []\n```\n')
+  wf(join(D, 'epics/XX-01.md'), '---\nkey: XX-01\ntitle: T\napp: a\nconsumes_raw: **Consumes:** P07\nsource: o/r:docs/specs/x.md@abc1234\n---\n\n## What to build\n\nx\n')
+  wf(join(D, 'journeys/XX-J1.md'), '---\nkey: XX-J1\ntitle: T\ngoal: g\npersona: p\nsource: specs/j.md#journey-a\n---\n\n## Journey A — T\n\n1. step\n')
+  wf(join(tmp, 'server.json'), JSON.stringify({ project: 'p', apps: ['a'], epics: [], journeys: [], personas: [], modules: [], stories: [] }))
+  const out = JSON.parse(execFileSync('node', [join(here, '../../lib/sakal-plan.mjs'), '--dir', D, '--server', join(tmp, 'server.json'), '--json'], { encoding: 'utf8' }))
+  eq(JSON.stringify(out.writes), JSON.stringify({ journey_narratives: 1, epic_consumes_raw: 1, epic_sources: 1, story_sources: 1, app_profile: true }), 'plan JSON names all three write families with counts')
+  rmSync(tmp, { recursive: true, force: true })
+
+  const submitDoc = read('../../commands/sakal-submit.md').replace(/\s+/g, ' ')
+  eq(submitDoc.includes('sakal_update_app_profile'), true, 'profile writes through sakal_update_app_profile (035), not sakal_update_app')
+  eq(submitDoc.includes('narrative held back; server predates SKM-035'), true, 'narrative degradation message, verbatim')
+  eq(submitDoc.includes('profile held back; server predates SKM-035'), true, 'profile degradation message, verbatim')
+  eq(submitDoc.includes('source held back; server predates SKM-036'), true, 'source degradation message, verbatim')
+  eq(submitDoc.includes('degrades INDEPENDENTLY, never all-or-nothing'), true, 'partial landing is per-field, named, never all-or-nothing')
+}
+
 console.log(`\n${fail ? 'FAILED' : 'OK'} — ${pass} passed, ${fail} failed\n`)
 process.exit(fail ? 1 : 0)

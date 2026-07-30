@@ -54,19 +54,27 @@ command that guesses is a command that surprises.
    a human'"'"'s call.)
 6. **Always report whole-tree drift**, even for a scoped submit.
 7. **Journey records → `p_narrative`.** A `journeys/<KEY>.md` body maps onto
-   `sakal_create_journey`/`sakal_update_journey`'"'"'s narrative param — and
-   **degrades gracefully while the server predates SKM-035**: an
-   unknown-param refusal means print exactly *"narrative held back; server
-   predates SKM-035"* and submit the journey'"'"'s index fields anyway. The
-   app_profile pattern, verbatim.
-8. **App profile → `sakal_update_app`.** When `config.yaml` carries an
-   `app_profile:` block, map it onto the SKM-034 apps columns (`setup_cmd`,
-   `verify_cmd`, `denylist`, `evidence_format`, `conventions_files`; the
-   comma-separated fields become arrays) via `sakal_update_app` — and
-   **degrade gracefully when the server predates SKM-034**: an unknown-field
-   refusal means print exactly *"profile held back; server predates SKM-034"*
-   and submit everything else. There is no ordering dependency between the
-   two dispatches; never fail the whole submit over the profile.
+   `sakal_create_journey`/`sakal_update_journey`'"'"'s `narrative` param — and
+   **degrades gracefully while the server predates SKM-035**: the param
+   refused or absent means print exactly *"narrative held back; server
+   predates SKM-035"* and submit the journey'"'"'s index fields anyway.
+8. **App profile → `sakal_update_app_profile`** (owner/admin-only tool,
+   exists as of SKM-035; `sakal_update_app` edits only label/colour and is
+   NOT the profile'"'"'s home). Map the `app_profile:` block'"'"'s `setup_cmd`,
+   `verify_cmd`, `denylist`, `evidence_format`, `conventions_files`
+   (comma-separated fields become arrays). **When the tool is not present,
+   the server predates SKM-035**: print exactly *"profile held back; server
+   predates SKM-035"* and submit everything else.
+9. **`source:` URIs → `p_source`.** Story and epic frontmatter `source:`
+   values map onto the create/update params **once SKM-036 lands**; until
+   then the refusal means print exactly *"source held back; server predates
+   SKM-036"* and submit the record without it.
+
+**Partial landing is normal (e.g. 035 deployed, 036 not): each mapping above
+degrades INDEPENDENTLY, never all-or-nothing — and every held-back line names
+WHICH field was held and WHICH migration the server predates.** Never fail a
+submit over a mapping the server cannot take yet; the files keep the truth
+and a re-submit converges after the migration deploys.
 
 **Selectors are resolved by code, not by reading this carefully.** Always run:
 

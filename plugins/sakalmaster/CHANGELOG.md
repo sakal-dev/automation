@@ -3,6 +3,29 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.10.0 — submit catches up with the server (SKA-029)
+
+The plugin now calls what SKM-035 shipped, and names what it still cannot.
+
+- **App profile → `sakal_update_app_profile`** (the owner/admin tool that
+  exists as of SKM-035); `sakal_update_app` edits only label/colour and is
+  no longer the profile's home. Tool absent → *"profile held back; server
+  predates SKM-035"*, everything else submits.
+- **`source:` URIs → `p_source`** on story/epic writes, ready ahead of
+  SKM-036: until it deploys, *"source held back; server predates SKM-036"*.
+- **Partial landing is the documented norm:** every mapping (narrative,
+  profile, consumes_raw, source) degrades INDEPENDENTLY and every held-back
+  line names WHICH field and WHICH migration — never all-or-nothing, never
+  a failed submit over a column the server lacks; re-submit converges.
+- **The submit plan names the new writes:** `sakal-plan.mjs` reports journey
+  narratives, epic consumes_raw, the app profile, and source-URI counts with
+  the migration each needs — in text and `--json` (`writes`).
+- Suite: an e2e run of the plan CLI over a synthetic tree asserts the writes
+  summary; the three degradation messages are doc-contract-tested verbatim.
+
+Reminder that bites here: **an MCP rebuild is invisible to a running session
+— restart Claude Code** before expecting the 035 tools to be callable.
+
 ## 0.9.0 — journeys as a walked tree (SKA-028 · A5 ruling B)
 
 The journey narratives join the fidelity-gated working copy — one file per

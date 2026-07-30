@@ -32,7 +32,7 @@ const stories = []
 for (const p of walk(join(DIR, 'stories'))) {
   const t = readFileSync(p, 'utf8')
   const g = k => { const m = t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')); return m ? stripInlineComment(m[1]) : undefined }
-  stories.push({ file: relative(DIR, p), key: g('key'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module') })
+  stories.push({ file: relative(DIR, p), key: g('key'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module'), hasSource: /^source:\s*\S/m.test(t) })
 }
 const on = { epic: new Set(server.epics ?? []), journey: new Set(server.journeys ?? []),
   persona: new Set(server.personas ?? []), module: new Set(server.modules ?? []), story: new Set(server.stories ?? []) }
@@ -59,7 +59,23 @@ for (const s of stories.filter(s => inS(s.file))) {
 const want = new Set(stories.map(s => `spec:${ns}:${s.key}`))
 const drift = { onlyLocal: [...want].filter(k => !on.story.has(k)), onlyServer: [...on.story].filter(k => !want.has(k)) }
 
-if (JSON_OUT) { console.log(JSON.stringify({ ok: !declProblems.length, declProblems, ready, blocked, already, drift }, null, 2)); process.exit(declProblems.length ? 1 : 0) }
+// ── the SKA-029 writes: narrative · profile · consumes_raw · source ─────────
+// What THIS tree will send beyond keys/refs, and which server migration each
+// depends on. Each degrades INDEPENDENTLY at submit time (a pre-035/036
+// server holds a field back by name; nothing is all-or-nothing).
+const mdFiles = d => existsSync(join(DIR, d)) ? readdirSync(join(DIR, d), { withFileTypes: true }).filter(e => e.name.endsWith('.md')).map(e => join(DIR, d, e.name)) : []
+const fmOf = p => { const t = readFileSync(p, 'utf8'); const g = k => { const m = t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')); return m ? stripInlineComment(m[1]).trim() : null }; return { g, body: t.split('\n---\n').slice(1).join('\n---\n') } }
+const journeyFiles = mdFiles('journeys').map(fmOf)
+const epicFiles = mdFiles('epics').map(fmOf)
+const writes = {
+  journey_narratives: journeyFiles.filter(f => f.body?.trim()).length,          // → p_narrative (SKM-035)
+  epic_consumes_raw: epicFiles.filter(f => f.g('consumes_raw')).length,          // → p_consumes_raw (SKM-035)
+  epic_sources: epicFiles.filter(f => f.g('source')).length,                     // → p_source (SKM-036)
+  story_sources: stories.filter(s => s.hasSource).length,                        // → p_source (SKM-036)
+  app_profile: /^app_profile:/m.test(cfgText),                                   // → sakal_update_app_profile (SKM-035)
+}
+
+if (JSON_OUT) { console.log(JSON.stringify({ ok: !declProblems.length, declProblems, ready, blocked, already, drift, writes }, null, 2)); process.exit(declProblems.length ? 1 : 0) }
 if (declProblems.length) {
   console.log('REFUSED — the declaration does not resolve against the server. Nothing was written.')
   for (const d of declProblems) console.log(`  ${d}`)
@@ -69,6 +85,11 @@ console.log(`\n  submit readiness${SCOPE ? ` (scope: ${SCOPE})` : ''}:`)
 console.log(`    ready: ${ready.length}   blocked: ${blocked.length}   already in SakalMaster: ${already.length}`)
 for (const x of ready) console.log(`      ready    ${x.key}`)
 for (const x of blocked) console.log(`      blocked  ${x.why}`)
+console.log(`\n  beyond keys/refs, this tree carries (each degrades INDEPENDENTLY, held back by name on an older server):`)
+console.log(`    ${writes.journey_narratives} journey narrative(s) → p_narrative (needs SKM-035)`)
+console.log(`    ${writes.epic_consumes_raw} epic consumes_raw line(s) → p_consumes_raw (needs SKM-035)`)
+console.log(`    app profile: ${writes.app_profile ? 'present → sakal_update_app_profile (needs SKM-035)' : 'none declared'}`)
+console.log(`    ${writes.story_sources + writes.epic_sources} source URI(s) (stories ${writes.story_sources} · epics ${writes.epic_sources}) → p_source (needs SKM-036)`)
 console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just the scope):`)
 if (!drift.onlyLocal.length && !drift.onlyServer.length) console.log('    none — files and SakalMaster agree')
 if (drift.onlyLocal.length) console.log(`    ${drift.onlyLocal.length} in files, NOT yet in SakalMaster: ${drift.onlyLocal.join(', ')}`)
