@@ -3,6 +3,15 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.10.1 — R-5 closed (SKA-031)
+
+No emit path for `proposals/consumes-raw.yaml` existed after 0.8.0 — the
+validator's observable was the stale 0.7.0-era file committed in the garage
+tree, which prepare reports as superseded but never deletes. The file is now
+removed from that tree by hand (as ruled), and the golden suite asserts no
+family's output contains a `proposals/` path or a consumes-raw file, so a
+remnant can never come back silently.
+
 ## 0.10.0 — submit catches up with the server (SKA-029)
 
 The plugin now calls what SKM-035 shipped, and names what it still cannot.

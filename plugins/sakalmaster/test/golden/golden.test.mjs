@@ -184,6 +184,21 @@ console.log('\n── wrong-family forcing REFUSES (S1, veto signal, or underiva
   eq(refuses('stock', 'SS-01-platform-auth-shell.md', 'greenfield'), null, 'reference input under greenfield parses (superset) — declaration + veto guard this direction')
 }
 
+console.log('\n── A3.1: proposals/consumes-raw.yaml exists in NO family\'s output (R-5)')
+{
+  // The consumes slot lives in frontmatter since 0.8.0; the proposals file is
+  // superseded in every family. Guard the expected tree (regen regressions)
+  // and every rendered path in this suite.
+  const { readdirSync: rd } = await import('node:fs')
+  const anyFile = d => rd(join(here, d), { withFileTypes: true, recursive: true }).filter(e => e.isFile()).map(e => `${e.parentPath ?? e.path}/${e.name}`)
+  eq(anyFile('expected').filter(p => /consumes-raw/.test(p)).length, 0, 'no consumes-raw.yaml anywhere under expected/')
+  for (const c of CASES) for (const file of c.files) {
+    const { out } = renderAll(c, file, read(`inputs/${c.dir}/${file}`))
+    for (const rel of out.keys()) if (/proposals\//.test(rel)) { eq(rel, '(none)', `${c.dir}/${file} rendered a proposals/ path`) }
+  }
+  pass++; console.log('  PASS  no family render emits a proposals/ path')
+}
+
 console.log('\n── never derived from a table; README never scanned')
 {
   eq(FAMILIES.reference.filePattern.test('README.md'), false, 'README excluded from discovery (reference)')
