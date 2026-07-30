@@ -3,6 +3,31 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.11.0 — epic prose reaches the server (SKA-032 · R-6)
+
+Production's first epics landed THIN because no cut ever mapped the epic
+prose at submit — journeys and sources were mapped, the epic fell between.
+
+- **New: `lib/sakal-record.mjs`** — extracts the four SKM-035 epic fields by
+  code: `tier`, `consumes_raw` (VERBATIM, `**` markers included), the
+  "What to build" body → `narrative`, "Test strategy" (decorated and
+  "Testing strategy" variants) / "How this epic proves itself" →
+  `test_strategy`. Record mode for `epics/<KEY>.md`; `--source` mode for a
+  raw spec doc (project-scope index entries resolve their source at its pin
+  and extract from that). ONE shared sectionByAnchor underneath. Missing
+  pieces are `gaps` — data to report, never invent; a different section
+  ("Why this exists") is never mapped as if it were the asked-for one.
+- **Submit step 10** maps the four fields onto `create_epic`/`update_epic`
+  (re-submits CONVERGE in place), with the same per-field held-back
+  discipline as everything else.
+- **The plan counts the epic-prose writes** (`epic_narratives`,
+  `epic_test_strategies`) in text and `--json`.
+- Extraction verified against the three thin production epics' actual
+  source docs: BE-01/FP-01 gain consumes_raw + test_strategy (their docs
+  carry no What-to-build — honest gap); OA-01's catalog-README source
+  yields all-gap — its full prose converges from owner-flutter's app-scope
+  epic record instead.
+
 ## 0.10.1 — R-5 closed (SKA-031)
 
 No emit path for `proposals/consumes-raw.yaml` existed after 0.8.0 — the

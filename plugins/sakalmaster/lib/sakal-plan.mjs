@@ -70,6 +70,11 @@ const epicFiles = mdFiles('epics').map(fmOf)
 const writes = {
   journey_narratives: journeyFiles.filter(f => f.body?.trim()).length,          // → p_narrative (SKM-035)
   epic_consumes_raw: epicFiles.filter(f => f.g('consumes_raw')).length,          // → p_consumes_raw (SKM-035)
+  // Epic prose (SKA-032, the R-6 gap): narrative + test-strategy sections in
+  // the records, extractable via lib/sakal-record.mjs at submit time. A
+  // project-scope index counts entries whose source doc holds the prose.
+  epic_narratives: epicFiles.filter(f => /^##\s+What to build\s*$/mi.test(f.body ?? '')).length,
+  epic_test_strategies: epicFiles.filter(f => /^##\s+(Test strategy|How this epic proves itself)\s*$/mi.test(f.body ?? '')).length,
   epic_sources: epicFiles.filter(f => f.g('source')).length,                     // → p_source (SKM-036)
   story_sources: stories.filter(s => s.hasSource).length,                        // → p_source (SKM-036)
   app_profile: /^app_profile:/m.test(cfgText),                                   // → sakal_update_app_profile (SKM-035)
@@ -88,6 +93,7 @@ for (const x of blocked) console.log(`      blocked  ${x.why}`)
 console.log(`\n  beyond keys/refs, this tree carries (each degrades INDEPENDENTLY, held back by name on an older server):`)
 console.log(`    ${writes.journey_narratives} journey narrative(s) → p_narrative (needs SKM-035)`)
 console.log(`    ${writes.epic_consumes_raw} epic consumes_raw line(s) → p_consumes_raw (needs SKM-035)`)
+console.log(`    epic prose: ${writes.epic_narratives} narrative(s) · ${writes.epic_test_strategies} test strateg(ies) → p_narrative/p_test_strategy (needs SKM-035; extract via lib/sakal-record.mjs)`)
 console.log(`    app profile: ${writes.app_profile ? 'present → sakal_update_app_profile (needs SKM-035)' : 'none declared'}`)
 console.log(`    ${writes.story_sources + writes.epic_sources} source URI(s) (stories ${writes.story_sources} · epics ${writes.epic_sources}) → p_source (needs SKM-036)`)
 console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just the scope):`)

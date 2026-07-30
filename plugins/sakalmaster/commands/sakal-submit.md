@@ -69,6 +69,21 @@ command that guesses is a command that surprises.
    values map onto the create/update params **once SKM-036 lands**; until
    then the refusal means print exactly *"source held back; server predates
    SKM-036"* and submit the record without it.
+10. **Epic prose → `create_epic`/`update_epic`** (the R-6 gap: production'"'"'s
+   first epics landed THIN because nothing sent these; the server has taken
+   all four since SKM-035). Extract by code, never by reading carefully:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-record.mjs <file> [--source] --json`
+   - **App-scope epic record** (`epics/<KEY>.md`): run it on the record —
+     `tier` → `p_tier` · `consumes_raw` → `p_consumes_raw` (VERBATIM,
+     `**` markers included) · the "What to build" body → `p_narrative` ·
+     "Test strategy" / "How this epic proves itself" → `p_test_strategy`.
+   - **Project-scope index entry** (epics.yaml, no record): resolve the
+     entry'"'"'s `source:` doc AT ITS PIN (`git show <pin>:./<path> > tmp`)
+     and run the CLI with `--source` on it; the index'"'"'s `outcome:` still
+     maps to `p_outcome`.
+   - The CLI'"'"'s `gaps` are sent as-is missing and REPORTED, never invented
+     (section-less flutter-pos variants, catalog-README sources). Re-submits
+     CONVERGE: `update_epic` in place, never a duplicate.
 
 **Partial landing is normal (e.g. 035 deployed, 036 not): each mapping above
 degrades INDEPENDENTLY, never all-or-nothing — and every held-back line names
