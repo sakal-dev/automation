@@ -119,6 +119,23 @@ errors: the story submits as a story, is **never agent-ready**, and its brief
 must say "no ACs — define them first". In a **hand-authored tree** (no pin),
 no ACs stays an **error**: there, the absence means nobody wrote the promise.
 
+## Key renames and AC renumbers (SKA-033, ruled)
+
+Keys are identity and letters are addresses; the server rows underneath keep
+their uuids, and evidence (citations, bugs, verifier results) attaches to the
+ROW. Therefore:
+
+- **A key rename or story split requires an operator decision record in
+  `decisions.md` BEFORE the re-submit.** Never infer one from an orphan pair
+  ("server has X; tree does not" + a new key) — the orphan report is the
+  tripwire, not the permission.
+- **An AC renumber (count/order/letters changed) is refused at submit** until
+  the operator confirms with `--confirm-ac-changes` — a shifted re-submit
+  would silently re-text rows whose evidence still attests the old claim.
+  Text-only edits under stable ids are scenario A: they flow freely.
+- **Deleting server records and citations is a human act.** Submit reports
+  orphans and flags vanished cites; it never deletes either.
+
 ## What is NOT in scope for a convention
 
 Whether an AC is the *right* AC. Whether an epic is worth shipping. Whether a

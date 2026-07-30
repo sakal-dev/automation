@@ -3,6 +3,33 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.12.0 — the mutation contract (SKA-033 · D02-R1)
+
+Submit stops trusting re-runs to be safe and starts proving it.
+
+- **New: `lib/sakal-baseline.mjs`** — `.sakal/.baseline.json`, the COMMITTED
+  receipt of last-submitted values (committed deliberately: the tree is
+  committed by design and the receipt must travel with the branch, or two
+  machines disagree about one server). Byte-deterministic serialization.
+- **P-M3 — the AC-set gate:** count/order/letters differ from the receipt →
+  REFUSE with the renumber diff (letters are addresses; rows keep their
+  uuid — a shifted re-submit silently re-texts rows whose evidence still
+  attests the old claim). `--confirm-ac-changes` is the operator's explicit
+  pass-through; text-only edits under stable ids flow freely.
+- **P-M4 — cite convergence,** keyed (ac, path, symbol, kind): add missing,
+  SKIP identical (a pre-SKM-039 server duplicates re-adds — never re-send
+  what the receipt shows landed), FLAG vanished, never delete.
+- **P-M5 — three-way:** server ≠ receipt on a field → REFUSE naming the
+  field and both values; degrades to two-way (stated) until the SKM-038
+  read-back supplies server values.
+- **P-M1 — the orphan report** at every submit: "server has X; tree does
+  not" per entity kind (stories by app namespace, epics/journeys by
+  project); deletion stays a human act. Plan output + `--json` gain it.
+- **P-M2 —** a key rename/split requires an operator decision record BEFORE
+  re-submit (CONVENTIONS.md); the orphan report is the tripwire.
+- First submit: no receipt, nothing refuses. Corrupt receipt: stated, with
+  `--rebaseline` showing the full new receipt before writing.
+
 ## 0.11.0 — epic prose reaches the server (SKA-032 · R-6)
 
 Production's first epics landed THIN because no cut ever mapped the epic

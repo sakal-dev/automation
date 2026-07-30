@@ -613,6 +613,30 @@ export function renderJourneyDoc({ key, title, goal, persona, sourcePath, anchor
   return `---\n${fm.join('\n')}\n---\n\n${body}\n`
 }
 
+/** Value-reader for a story record's fenced-yaml AC block: ids in order,
+ *  raw markers/ranges/tags, unquoted text, cite tuples. (Verify keeps its own
+ *  line-numbered walk for error reporting; this is the VALUES view shared by
+ *  the baseline and any other consumer that needs what a record says.) */
+export function readFencedACs(text) {
+  const acs = []
+  let inYaml = false, ac = null, cite = null
+  for (const raw of String(text).split('\n')) {
+    if (/^```yaml\s*$/.test(raw.trim())) { inYaml = true; continue }
+    if (/^```\s*$/.test(raw.trim())) { inYaml = false; ac = null; cite = null; continue }
+    if (!inYaml) continue
+    let m
+    if ((m = raw.match(/^-\s+ac:\s*(\S+)\s*$/))) { ac = { id: m[1], marker: null, range: null, tag: null, text: null, cites: [] }; acs.push(ac); cite = null; continue }
+    if (!ac) continue
+    if ((m = raw.match(/^\s+marker:\s*(.*)$/))) { ac.marker = yamlUnquote(m[1]); continue }
+    if ((m = raw.match(/^\s+range:\s*(.*)$/))) { ac.range = yamlUnquote(m[1]); continue }
+    if ((m = raw.match(/^\s+tag:\s*(.*)$/))) { ac.tag = yamlUnquote(m[1]); continue }
+    if ((m = raw.match(/^\s+text:\s*(.*)$/))) { ac.text = yamlUnquote(m[1]); continue }
+    if ((m = raw.match(/^\s+-\s+kind:\s*(\S+)\s*$/))) { cite = { kind: m[1] }; ac.cites.push(cite); continue }
+    if (cite && (m = raw.match(/^\s+(path|symbol|sha|note):\s*(.*)$/))) { cite[m[1]] = yamlUnquote(m[2]); continue }
+  }
+  return acs
+}
+
 // ── ONE declaration / test-label matcher ────────────────────────────────────
 // The cite-honesty rule made mechanical: `enforced` needs an exact-name
 // DECLARATION in the cited file; `verified` needs the exact innermost

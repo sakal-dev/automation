@@ -1,5 +1,5 @@
 {
   "name": "sakalmaster",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Get a project into SakalMaster from its own repo. PREPARE and VERIFY are fully OFFLINE — draft and lint a committed .sakal/ directory with no connection at all; SUBMIT is the only phase that touches the server. Includes CONVENTIONS.md, the house schema verify enforces mechanically."
 }

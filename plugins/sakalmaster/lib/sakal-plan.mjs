@@ -59,6 +59,7 @@ for (const s of stories.filter(s => inS(s.file))) {
 const want = new Set(stories.map(s => `spec:${ns}:${s.key}`))
 const drift = { onlyLocal: [...want].filter(k => !on.story.has(k)), onlyServer: [...on.story].filter(k => !want.has(k)) }
 
+
 // ── the SKA-029 writes: narrative · profile · consumes_raw · source ─────────
 // What THIS tree will send beyond keys/refs, and which server migration each
 // depends on. Each degrades INDEPENDENTLY at submit time (a pre-035/036
@@ -80,7 +81,23 @@ const writes = {
   app_profile: /^app_profile:/m.test(cfgText),                                   // → sakal_update_app_profile (SKM-035)
 }
 
-if (JSON_OUT) { console.log(JSON.stringify({ ok: !declProblems.length, declProblems, ready, blocked, already, drift, writes }, null, 2)); process.exit(declProblems.length ? 1 : 0) }
+// ── P-M1 (SKA-033): the orphan report — server has X; tree does not ─────────
+// A record the tree stopped naming is a claimable ghost. Reported at EVERY
+// submit, per entity kind; deletion stays a human act. Stories scope by app
+// (the `spec:<app>:` namespace); epics/journeys scope by project.
+const treeEpicKeys = new Set(epicFiles.map(f => f.g('key')).filter(Boolean))
+const treeJourneyKeys = new Set(journeyFiles.map(f => f.g('key')).filter(Boolean))
+for (const y of [['epics.yaml', treeEpicKeys], ['journeys.yaml', treeJourneyKeys]]) {
+  const p = join(DIR, y[0])
+  if (existsSync(p)) for (const m of readFileSync(p, 'utf8').matchAll(/^\s*-\s+(\S+)\s+—/gm)) y[1].add(m[1])
+}
+const orphans = {
+  stories: drift.onlyServer,
+  epics: (server.epics ?? []).filter(k => !treeEpicKeys.has(k)),
+  journeys: (server.journeys ?? []).filter(k => !treeJourneyKeys.has(k)),
+}
+
+if (JSON_OUT) { console.log(JSON.stringify({ ok: !declProblems.length, declProblems, ready, blocked, already, drift, writes, orphans }, null, 2)); process.exit(declProblems.length ? 1 : 0) }
 if (declProblems.length) {
   console.log('REFUSED — the declaration does not resolve against the server. Nothing was written.')
   for (const d of declProblems) console.log(`  ${d}`)
@@ -100,4 +117,11 @@ console.log(`\n  drift vs the server, read live just now (WHOLE TREE, not just t
 if (!drift.onlyLocal.length && !drift.onlyServer.length) console.log('    none — files and SakalMaster agree')
 if (drift.onlyLocal.length) console.log(`    ${drift.onlyLocal.length} in files, NOT yet in SakalMaster: ${drift.onlyLocal.join(', ')}`)
 if (drift.onlyServer.length) { console.log(`    ${drift.onlyServer.length} in SakalMaster, NOT in files: ${drift.onlyServer.join(', ')}`); console.log('      ↳ someone edited in-app, or a story left the files. Submit will NOT delete these.') }
+if (orphans.stories.length || orphans.epics.length || orphans.journeys.length) {
+  console.log(`\n  ORPHANS (P-M1) — a record the tree stopped naming is a claimable ghost; deletion stays a human act:`)
+  for (const k of orphans.stories) console.log(`    server has story ${k}; tree does not`)
+  for (const k of orphans.epics) console.log(`    server has epic ${k}; tree does not`)
+  for (const k of orphans.journeys) console.log(`    server has journey ${k}; tree does not`)
+  console.log('      ↳ a key rename/split needs an operator DECISION RECORD before re-submit (CONVENTIONS.md) — this report is the tripwire.')
+}
 console.log()
