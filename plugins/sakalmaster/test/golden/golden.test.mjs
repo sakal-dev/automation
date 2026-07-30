@@ -296,6 +296,44 @@ console.log('\n── submit-plan writes summary + degradation contract')
   const c1 = base(['--check'])
   eq(c1.status === 1 && /receipt is corrupt/.test(c1.stderr + c1.stdout), true, 'corrupt baseline states itself and offers --rebaseline')
   eq(base(['--rebaseline']).status, 0, '--rebaseline recovers, showing the full new receipt')
+
+  // ── SKA-034: permanent P-M3 · P-M6(i) · acked receipts · submit-log ──
+  wf(storyPath, orig.replace('text: "claim"', 'text: "the gate refuses a cashier-only login"'))
+  base(['--rebaseline'])
+  // exact-content letter shift converges silently under confirm
+  wf(storyPath, readFileSync(storyPath, 'utf8').replace('- ac: XX-01-01-a\n  text: "the gate refuses a cashier-only login"', '- ac: XX-01-01-b\n  text: "the gate refuses a cashier-only login"'))
+  const conv = base(['--check', '--confirm-ac-changes'])
+  eq(conv.status === 0 && /row XX-01-01-a → address XX-01-01-b \(text unchanged\)/.test(conv.stdout), true, 'P-M3: exact content match converges — row keeps uuid, letter recomputes')
+  // near-match refuses with ranked suggestions; --map proceeds; =new forces a row
+  wf(storyPath, readFileSync(storyPath, 'utf8').replace('the gate refuses a cashier-only login', 'the gate refuses a cashier-only login and clears state'))
+  const near = base(['--check', '--confirm-ac-changes'])
+  eq(near.status === 1 && /resembles receipt row XX-01-01-a at \d+%/.test(near.stdout) && /--map XX-01-01-b=XX-01-01-a/.test(near.stdout), true, 'P-M3: near-match refuses with ranked suggestions — thresholds rank, never decide')
+  eq(base(['--check', '--confirm-ac-changes', '--map', 'XX-01-01-b=XX-01-01-a']).status, 0, 'operator --map resolves the ambiguity')
+  eq(base(['--check', '--confirm-ac-changes', '--map', 'XX-01-01-b=new']).status, 0, '--map =new forces a fresh row instead')
+  // retext under evidence refuses bare, surfaces under confirm
+  base(['--rebaseline'])
+  wf(storyPath, readFileSync(storyPath, 'utf8')
+    .replace('  cite: []\n```', '  cite:\n    - kind: enforced\n      path: lib/x.dart\n      symbol: Gate\n      sha: abc1234\n```'))
+  base(['--rebaseline'])
+  wf(storyPath, readFileSync(storyPath, 'utf8').replace('and clears state', 'and clears ALL state'))
+  const rt = base(['--check'])
+  eq(rt.status === 1 && /re-texting under evidence/.test(rt.stdout) && /predating SKM-040/.test(rt.stdout), true, 'P-M6(i): re-text under evidence refuses, naming the SKM-040 degradation')
+  eq(base(['--check', '--confirm-ac-changes']).status, 0, 'P-M6(i): confirm surfaces and proceeds')
+  // per-write acks: only acked records land; bogus acks refuse
+  rmSync(join(D, '.baseline.json'))
+  const ack1 = base(['--write', '--ack', 'stories/XX-01-01', '--map', 'XX-01-01-b=XX-01-01-a', '--ts', '2026-07-30T12:00:00Z'])
+  eq(ack1.status, 0, 'per-write ack lands the record in the receipt')
+  const receipt = JSON.parse(readFileSync(join(D, '.baseline.json'), 'utf8'))
+  eq(Object.keys(receipt.stories).join(','), 'XX-01-01', 'receipt holds exactly the acked record')
+  eq(JSON.stringify(receipt.mappings), JSON.stringify({ 'XX-01-01': ['XX-01-01-b<=XX-01-01-a'] }), 'the confirmed mapping is recorded in the committed receipt')
+  eq(base(['--write', '--ack', 'stories/NOPE-01']).status, 1, 'an ack must name what was actually sent — bogus acks refuse')
+  // submit-log: append-only, terse, deterministic given --ts
+  const log1 = readFileSync(join(D, 'submit-log.md'), 'utf8')
+  eq(/## 2026-07-30T12:00:00Z\n- stories 1 acked: XX-01-01\n- mappings confirmed: XX-01-01-b=XX-01-01-a/.test(log1), true, 'submit-log entry: one line per write family + mappings, timestamped')
+  base(['--log', 'refusal: three-way (test)', '--ts', '2026-07-30T12:01:00Z'])
+  const log2 = readFileSync(join(D, 'submit-log.md'), 'utf8')
+  eq(log2.startsWith(log1), true, 'the log is append-only')
+  eq(/## 2026-07-30T12:01:00Z\n- refusal: three-way \(test\)/.test(log2), true, 'refusals are recordable, deterministic given --ts')
   rmSync(tmp, { recursive: true, force: true })
 
   // SKA-032 (R-6): the epic-prose extractor — ONE shared sectionByAnchor

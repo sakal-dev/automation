@@ -3,6 +3,31 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.13.0 — the permanent mutation design (SKA-034 · D02-R2)
+
+- **P-M3, permanent, as amended:** on a CONFIRMED AC-set change, content
+  matching converges what is provably the same — EXACT text match maps the
+  row silently (uuid kept, letter recomputed as a display address); the
+  rest REFUSES with ranked suggestions only ("tree -b resembles receipt
+  row -c at 87%") — thresholds rank, never decide; the operator confirms
+  each with `--map treeId=row` (or `=new`), the confirmed mapping lands in
+  the COMMITTED receipt, unmatched tree ACs become new rows, unmatched
+  receipt rows are flagged orphan-ACs. Never re-texted silently, never
+  deleted.
+- **P-M6(i):** any text change on an evidenced row is surfaced in the
+  confirm diff (old→new + citation count), set-shift or not; the SKM-040
+  degradation is stated (verifier state does not auto-reset on older
+  servers — run the sweep). Unevidenced stable-id edits stay frictionless.
+- **One refusal at a time:** a three-way (server-moved) refusal DEFERS AC
+  mapping explicitly — no double-refusal confusion.
+- **Per-write acked receipts:** `--write --ack kind/key` lands exactly the
+  acked records; "Sent N" may only equal acked-N; a bogus ack refuses;
+  partial failures leave un-acked records visibly stale.
+- **`.sakal/submit-log.md`** — append-only, human-readable, terse (one
+  line per write family + mappings/held-backs/refusals via `--note`/
+  `--log`), deterministic given `--ts`. Nothing submit-produced lives
+  outside `.sakal/` (operator ruling, binding).
+
 ## 0.12.0 — the mutation contract (SKA-033 · D02-R1)
 
 Submit stops trusting re-runs to be safe and starts proving it.

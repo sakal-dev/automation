@@ -40,13 +40,28 @@ command that guesses is a command that surprises.
    not resolve — **before any write**.
 1c. **Run the mutation gates** (SKA-033) — refusals are code, not care:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --check [--server <tmp>]`
-   - Exit 1 → show the refusal VERBATIM and stop. Two gates refuse: the
-     server moved since the last submit (in-app edits — reconcile by hand),
-     or the AC set changed (count/order/letters). Letters are ADDRESSES and
-     rows keep their uuid — a shifted re-submit silently re-texts rows whose
-     citations and bugs still attest the old claim. A DELIBERATE renumber:
-     the operator re-runs with `--confirm-ac-changes` (their call, recorded).
-   - Text-only AC edits under stable ids flow freely (`update_ac_text`).
+   - Exit 1 → show the refusal VERBATIM and stop. The gates, ONE refusal at
+     a time: the server moved since the last submit (in-app edits —
+     reconcile by hand; AC mapping is DEFERRED until resolved) · the AC set
+     changed (letters are ADDRESSES, rows keep their uuid) · re-texting
+     under evidence (P-M6 — the row carries citations that attest the OLD
+     wording).
+   - A DELIBERATE set change: `--confirm-ac-changes` runs CONTENT MATCHING —
+     exact text converges silently (the row keeps its uuid, the letter
+     recomputes as a display address); unmatched tree ACs become new rows;
+     unmatched receipt rows are flagged orphan-ACs, never deleted.
+     Ambiguity refuses with ranked SUGGESTIONS only — a score never moves
+     data; the operator confirms each with `--map <treeId>=<receiptRow>`
+     (or `=new`), and the confirmed mapping lands in the committed receipt
+     at ack time.
+   - Execute the printed convergence plan literally: `update_ac_text` for
+     mapped rows with changed text, `sakal_create_ac` for new rows,
+     `sakal_reorder_acs` to recompute display addresses. Re-texting an
+     evidenced row: SKM-040 resets its verification server-side; against a
+     server predating SKM-040, SAY SO and run the verify sweep after — the
+     state does not auto-reset.
+   - Text-only AC edits under stable ids with no evidence flow freely
+     (`update_ac_text`, scenario A).
    - Cite convergence is keyed (ac, path, symbol, kind): **ADD** the
      missing, **SKIP** the identical (a pre-SKM-039 server would duplicate a
      re-add — never re-send what the baseline shows landed), **FLAG** the
@@ -120,11 +135,16 @@ and a re-submit converges after the migration deploys.
 - Old shape `/sakal-onboard submit …` → one line: *"Submitting moved to
   **/sakal-submit**. Try `/sakal-submit <selector>`."* Not an error dump.
 
-11. **After a green submit, write the receipt:**
-   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --write`
-   `.sakal/.baseline.json` is COMMITTED — the team'"'"'s shared record of what
-   was last submitted; the next submit'"'"'s three-way gate compares
-   server/baseline/tree against it.
+11. **Ack every write into the receipt AS IT LANDS** — "Sent N" may only
+   ever equal acked-N:
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --write --ack stories/<KEY> [--ack …] [--map <treeId>=<row>]… [--note "held-back: …"]`
+   A partial failure leaves exactly the un-acked records out of the receipt
+   and the summary must name which landed and which did not. The receipt
+   (`.sakal/.baseline.json`) and the log (`.sakal/submit-log.md`,
+   append-only, one line per write family + held-backs/refusals/mappings)
+   are both COMMITTED, both inside `.sakal/` — nothing submit-produced
+   lives anywhere else (operator ruling, binding). Record refusals with
+   `--log "refusal: …"`. First-ever submit: full `--write` after the run.
 12. **The orphan report is not optional reading** (P-M1): "server has X;
    tree does not" lines mean a claimable ghost exists. A key rename or
    story split requires an operator DECISION RECORD (decisions.md) BEFORE

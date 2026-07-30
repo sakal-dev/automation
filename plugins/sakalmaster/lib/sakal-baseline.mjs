@@ -1,65 +1,74 @@
 #!/usr/bin/env node
 // =============================================================================
-// sakal-baseline — the last-submitted receipt, and the gates it powers
-// (SKA-033 · D02-R1 verdicts P-M3, P-M4, P-M5).
+// sakal-baseline — the last-submitted receipt and the mutation gates
+// (SKA-033 interim → SKA-034 permanent · D02 rounds 1–2, all verdicts).
 //
-// Q-M1 settled why this exists: AC identity is the ROW (uuid), the letter is
-// an ADDRESS — a letter-shift re-submit silently re-texts rows whose evidence
-// (citations, bugs, verifier results) stays attached. The corruption path
-// must be one explicit confirmation wide, not one spec edit wide.
+// Q-M1 settled why: AC identity is the ROW (uuid), the letter is an ADDRESS —
+// evidence (citations, bugs, verifier results) attaches to rows. So mutation
+// is governed here, mechanically:
 //
-//   .sakal/.baseline.json    last-submitted values per field, per record.
-//   COMMITTED, deliberately: the tree is committed by design and the baseline
-//   is the team's shared receipt — a gitignored copy would let two machines
-//   disagree about the same server, and the three-way refusal only means
-//   something if the receipt travels with the branch.
-//   Deterministic: sorted keys, stable serialization, trailing newline.
+//   P-M3 (permanent, as amended)  On a CONFIRMED set change: EXACT content
+//        match converges silently (same text = same criterion, the row keeps
+//        its uuid, the letter recomputes as a display address). Everything
+//        else REFUSES with the diff; near-matches are ranked SUGGESTIONS
+//        only — thresholds rank, never decide; no constant silently moves
+//        data. The operator's confirmed mapping (--map) is recorded in the
+//        committed receipt. Unmatched tree ACs become new rows; unmatched
+//        server rows are flagged orphans — NEVER deleted, NEVER re-texted
+//        silently.
+//   P-M6(i)  Any text change on a row carrying citations is surfaced in the
+//        confirm diff, set-shift or not — "re-texting under evidence" never
+//        slides through as scenario A. (The database-side verification reset
+//        is SKM-040's trigger; against a server predating it, verifier state
+//        does NOT auto-reset — stated, not assumed.)
+//   P-M5  Three-way: server ≠ receipt ⇒ REFUSE naming field + both values.
+//        When it refuses, AC mapping is DEFERRED (one refusal at a time — no
+//        double-refusal confusion).
+//   P-M4  Cites keyed (ac, path, symbol, kind): add missing, SKIP identical
+//        (SKM-039 makes a re-add a quiet no-op server-side; pre-039 servers
+//        would duplicate — never re-send what the receipt shows landed),
+//        FLAG vanished, never delete.
+//
+// THE RECEIPT (.sakal/.baseline.json) is COMMITTED — the team's shared
+// record; deterministic serialization (sorted keys, stable order). Writes
+// land in it PER-WRITE on ACK: "Sent N" may only ever equal acked-N, and a
+// partial failure leaves exactly the un-acked records stale (the next check
+// names them). THE LOG (.sakal/submit-log.md) is append-only and human-
+// readable; nothing submit-produced lives outside .sakal/ (operator ruling,
+// binding).
 //
 // Modes:
-//   --check (default)      compare TREE vs BASELINE (vs SERVER values where
-//                          the state file carries them):
-//     · P-M3  AC-set gate: count/order/letters differ from baseline → REFUSE
-//             (exit 1) with the renumber diff; --confirm-ac-changes proceeds.
-//             Text-only edits under stable ids FLOW FREELY (scenario A).
-//     · P-M4  cite convergence, keyed (ac, path, symbol, kind): ADD missing,
-//             SKIP identical, FLAG vanished — never delete (a vanished cite
-//             may be a moved file; CITEGONE at verify already speaks).
-//     · P-M5  three-way: server ≠ baseline on a field → REFUSE naming the
-//             field and both values (someone edited in-app; converging over
-//             them would clobber). Server values absent from the state file
-//             → stated, two-way only.
-//   --write                snapshot the tree as the new baseline (run AFTER
-//                          a green submit — the receipt records what landed).
-//   --rebaseline           lost/corrupt baseline recovery: shows the FULL
-//                          snapshot that will become the receipt, then writes.
-//
-// First-ever submit: no baseline → nothing to refuse, say so, exit 0
-// (--write afterwards creates it).
-//
-//   node sakal-baseline.mjs [--dir .sakal] [--check|--write|--rebaseline]
-//                           [--server state.json] [--confirm-ac-changes] [--json]
+//   --check [--server state.json] [--confirm-ac-changes] [--map T=B]...
+//   --write [--ack kind/key]... [--map T=B]... [--note "..."]... [--ts ISO]
+//   --rebaseline · --log "line" [--ts ISO]
 // =============================================================================
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
-import { join, relative } from 'node:path'
-import { readScalars, readFencedACs } from './sakal-shared.mjs'
+import { readFileSync, writeFileSync, existsSync, readdirSync, appendFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { readScalars, readFencedACs, normWS } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
+const all = n => args.flatMap((a, i) => a === n ? [args[i + 1]] : [])
 const DIR = opt('--dir', '.sakal')
-const MODE = args.includes('--write') ? 'write' : args.includes('--rebaseline') ? 'rebaseline' : 'check'
+const MODE = args.includes('--write') ? 'write' : args.includes('--rebaseline') ? 'rebaseline' : args.includes('--log') ? 'log' : 'check'
 const CONFIRM = args.includes('--confirm-ac-changes')
 const JSON_OUT = args.includes('--json')
 const SERVER = opt('--server', null)
+const TS = opt('--ts', null) ?? new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+const MAPS = all('--map').map(m => { const [t, b] = m.split('='); return { tree: t, base: b } })
+const ACKS = all('--ack')
+const NOTES = all('--note')
 const BASE = join(DIR, '.baseline.json')
+const LOG = join(DIR, 'submit-log.md')
 
-// ── snapshot: the tree's submitted values, deterministically ────────────────
+// ── snapshot ────────────────────────────────────────────────────────────────
 const sortObj = o => Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b, 'en')))
 const walk = d => existsSync(d) ? readdirSync(d, { withFileTypes: true }).flatMap(e =>
   e.isDirectory() ? walk(join(d, e.name)) : (e.name.endsWith('.md') ? [join(d, e.name)] : [])) : []
 const fmAndBody = p => {
   const lines = readFileSync(p, 'utf8').split('\n')
   const end = lines[0]?.trim() === '---' ? lines.indexOf('---', 1) : -1
-  return { fm: readScalars(lines.slice(1, end < 0 ? 0 : end).join('\n')), body: lines.slice(end + 1).join('\n'), text: lines.join('\n') }
+  return { fm: readScalars(lines.slice(1, end < 0 ? 0 : end).join('\n')), body: lines.slice(end + 1).join('\n') }
 }
 function snapshot() {
   const s = { stories: {}, epics: {}, journeys: {} }
@@ -87,104 +96,215 @@ function snapshot() {
   return { stories: sortObj(s.stories), epics: sortObj(s.epics), journeys: sortObj(s.journeys) }
 }
 const serialize = snap => JSON.stringify(snap, null, 2) + '\n'
+const loadBaseline = () => { try { return JSON.parse(readFileSync(BASE, 'utf8')) } catch { return undefined } }
 
 if (!existsSync(DIR)) { console.error(`${DIR}/ does not exist`); process.exit(2) }
 const tree = snapshot()
 
+// ── the append-only log: one terse entry, one line per write family ─────────
+function logAppend(lines) {
+  const head = existsSync(LOG) ? '' : '# submit log — append-only, written by submit (nothing submit-related lives outside .sakal/)\n'
+  appendFileSync(LOG, `${head}\n## ${TS}\n${lines.map(l => `- ${l}`).join('\n')}\n`)
+}
+
+if (MODE === 'log') {
+  logAppend([opt('--log', '')].concat(NOTES))
+  console.log(`  logged to ${LOG}`)
+  process.exit(0)
+}
+
 if (MODE === 'write' || MODE === 'rebaseline') {
-  if (MODE === 'rebaseline') {
-    console.log('  RE-BASELINE — the old receipt is lost or unreadable. The FULL snapshot below becomes the new receipt;')
-    console.log('  review it: anything the server holds beyond it will refuse as in-app drift on the next submit.\n')
-    console.log(serialize(tree))
+  let receipt
+  if (MODE === 'write' && ACKS.length) {
+    // Per-write acked receipts: ONLY acked records land; "Sent N" = acked-N.
+    receipt = loadBaseline() ?? { stories: {}, epics: {}, journeys: {} }
+    if (receipt === undefined) { console.error('  receipt unreadable — recover with --rebaseline first'); process.exit(1) }
+    const missing = []
+    for (const a of ACKS) {
+      const [kind, key] = a.split('/')
+      if (tree[kind]?.[key]) receipt[kind][key] = tree[kind][key]
+      else missing.push(a)
+    }
+    for (const k of ['stories', 'epics', 'journeys']) receipt[k] = sortObj(receipt[k])
+    if (missing.length) { console.error(`  REFUSED — acked records not in the tree: ${missing.join(', ')} (an ack must name what was actually sent)`); process.exit(1) }
+  } else {
+    if (MODE === 'rebaseline') {
+      console.log('  RE-BASELINE — the old receipt is lost or unreadable. The FULL snapshot below becomes the new receipt;')
+      console.log('  review it: anything the server holds beyond it will refuse as in-app drift on the next submit.\n')
+      console.log(serialize(tree))
+    }
+    receipt = tree
   }
-  writeFileSync(BASE, serialize(tree))
-  console.log(`  baseline written: ${BASE} (${Object.keys(tree.stories).length} stories · ${Object.keys(tree.epics).length} epics · ${Object.keys(tree.journeys).length} journeys)`)
+  // Confirmed mappings are part of the committed receipt (P-M3 as amended).
+  if (MAPS.length) {
+    receipt.mappings ??= {}
+    for (const m of MAPS.filter(m => m.base !== 'new')) {
+      const story = m.tree.replace(/-[a-z]$/, '')
+      receipt.mappings[story] = [...new Set([...(receipt.mappings[story] ?? []), `${m.tree}<=${m.base}`])].sort()
+    }
+    receipt.mappings = sortObj(receipt.mappings)
+  }
+  writeFileSync(BASE, serialize(receipt))
+  const counts = ['stories', 'epics', 'journeys'].map(k => `${k} ${Object.keys(receipt[k] ?? {}).length}`).join(' · ')
+  console.log(`  receipt ${ACKS.length ? `updated: ${ACKS.length} write(s) acked` : 'written (full)'} — ${counts}`)
   console.log('  Committed, deliberately — the receipt travels with the branch.')
+  if (MODE === 'write') {
+    const fam = { stories: [], epics: [], journeys: [] }
+    for (const a of ACKS) { const [k, key] = a.split('/'); (fam[k] ??= []).push(key) }
+    const famLines = ACKS.length
+      ? Object.entries(fam).filter(([, v]) => v.length).map(([k, v]) => `${k} ${v.length} acked: ${v.sort().join(' ')}`)
+      : [`full receipt: ${counts}`]
+    if (MAPS.length) famLines.push(`mappings confirmed: ${MAPS.map(m => `${m.tree}=${m.base}`).sort().join(' ')}`)
+    logAppend(famLines.concat(NOTES))
+    console.log(`  logged to ${LOG}`)
+  }
   process.exit(0)
 }
 
 // ── check ───────────────────────────────────────────────────────────────────
-const out = { firstSubmit: false, acGate: [], citesToAdd: [], citesIdentical: 0, citesVanished: [], threeWay: [], textOnly: [], notes: [] }
+const out = { firstSubmit: false, threeWay: [], acPlans: [], unresolved: [], retextUnderEvidence: [], textFree: [], citesToAdd: [], citesIdentical: 0, citesVanished: [], notes: [] }
 let baseline = null
 if (!existsSync(BASE)) {
   out.firstSubmit = true
-  out.notes.push('no baseline — first submit for this tree: nothing to refuse; everything is a create. Run --write after the submit lands.')
+  out.notes.push('no baseline — first submit for this tree: nothing to refuse; everything is a create. Ack writes into the receipt as they land (--write --ack kind/key).')
 } else {
-  try { baseline = JSON.parse(readFileSync(BASE, 'utf8')) } catch {
+  baseline = loadBaseline()
+  if (baseline === undefined) {
     console.error(`  REFUSED — ${BASE} exists but cannot be parsed. The receipt is corrupt.`)
     console.error('  Recover with --rebaseline: it prints the FULL snapshot that becomes the new receipt, then writes it.')
     process.exit(1)
   }
 }
 
+// Deterministic similarity: token Jaccard over normalised words. RANKS only.
+const tokens = s => new Set(normWS(s).toLowerCase().split(' ').filter(Boolean))
+const score = (a, b) => {
+  const ta = tokens(a), tb = tokens(b)
+  const inter = [...ta].filter(x => tb.has(x)).length
+  const union = new Set([...ta, ...tb]).size
+  return union ? Math.round((inter / union) * 100) : 0
+}
+
 if (baseline) {
-  // P-M3 — the AC-set gate.
-  for (const [key, st] of Object.entries(tree.stories)) {
+  // P-M5 first — one refusal at a time: server drift defers everything else.
+  const server = SERVER && existsSync(SERVER) ? JSON.parse(readFileSync(SERVER, 'utf8')) : null
+  const records = server?.records ?? null
+  if (!records) out.notes.push('server state carries no field values (SKM-038 read-back not deployed here) — three-way degrades to baseline-vs-tree; in-app edits cannot be detected until it ships')
+  else for (const kind of ['stories', 'epics', 'journeys']) for (const [key, srv] of Object.entries(records[kind] ?? {})) {
+    const b = baseline[kind]?.[key]
+    if (!b) continue
+    for (const [field, sv] of Object.entries(srv.fields ?? {}))
+      if (b.fields?.[field] !== undefined && String(sv) !== String(b.fields[field]))
+        out.threeWay.push({ kind, key, field, server: String(sv), baseline: String(b.fields[field]) })
+  }
+
+  if (!out.threeWay.length) for (const [key, st] of Object.entries(tree.stories)) {
     const b = baseline.stories?.[key]
-    if (!b) continue                       // new story — a create, no gate
-    const same = b.acs.length === st.acs.length && b.acs.every((id, i) => id === st.acs[i])
-    if (!same) {
-      out.acGate.push({ key, baseline: b.acs, tree: st.acs })
+    if (!b) continue
+    const citesOn = id => (b.cites ?? []).filter(c => c.startsWith(`${id}|`)).length
+    const sameSet = b.acs.length === st.acs.length && b.acs.every((id, i) => id === st.acs[i])
+    if (sameSet) {
+      for (const id of st.acs) {
+        if ((b.acTexts?.[id] ?? '') === (st.acTexts[id] ?? '')) continue
+        const n = citesOn(id)
+        if (n) out.retextUnderEvidence.push({ id, cites: n, old: b.acTexts[id], next: st.acTexts[id] })
+        else out.textFree.push(`${id}: text changed under a stable id, no evidence on the row — flows freely (scenario A)`)
+      }
     } else {
-      for (const id of st.acs) if ((b.acTexts?.[id] ?? '') !== (st.acTexts[id] ?? ''))
-        out.textOnly.push(`${id}: text changed under a stable id — flows freely (scenario A); update_ac_text converges it`)
+      // P-M3 permanent: content-match the changed set.
+      const bIds = [...b.acs], tIds = [...st.acs]
+      const mapped = []   // {tree, base, textChanged}
+      const explicit = new Map(MAPS.map(m => [m.tree, m.base]))
+      // exact content matches, unique both sides
+      for (const t of [...tIds]) {
+        const cands = bIds.filter(bid => (b.acTexts?.[bid] ?? '') === (st.acTexts[t] ?? ''))
+        if (cands.length === 1 && tIds.filter(x => (st.acTexts[x] ?? '') === (b.acTexts?.[cands[0]] ?? '')).length === 1) {
+          mapped.push({ tree: t, base: cands[0], textChanged: false })
+          bIds.splice(bIds.indexOf(cands[0]), 1); tIds.splice(tIds.indexOf(t), 1)
+        }
+      }
+      // operator-confirmed mappings
+      for (const t of [...tIds]) {
+        const target = explicit.get(t)
+        if (!target) continue
+        if (target === 'new') { mapped.push({ tree: t, base: null, textChanged: false }); tIds.splice(tIds.indexOf(t), 1); continue }
+        if (!bIds.includes(target)) { out.notes.push(`--map ${t}=${target}: ${target} is not an unmatched receipt row — ignored`); continue }
+        mapped.push({ tree: t, base: target, textChanged: (b.acTexts?.[target] ?? '') !== (st.acTexts[t] ?? '') })
+        bIds.splice(bIds.indexOf(target), 1); tIds.splice(tIds.indexOf(t), 1)
+      }
+      // the rest: suggestions rank, never decide
+      for (const t of tIds) {
+        const ranked = bIds.map(bid => ({ bid, s: score(st.acTexts[t] ?? '', b.acTexts?.[bid] ?? '') })).sort((a, z) => z.s - a.s || a.bid.localeCompare(z.bid))
+        if (ranked.length && ranked[0].s >= 50)
+          out.unresolved.push({ story: key, tree: t, suggestions: ranked.filter(r => r.s >= 50).slice(0, 3) })
+        else mapped.push({ tree: t, base: null, textChanged: false })   // new row
+      }
+      const orphanRows = bIds.filter(bid => !out.unresolved.some(u => u.suggestions.some(s => s.bid === bid)))
+      out.acPlans.push({ story: key, confirmed: CONFIRM, baseline: b.acs, tree: st.acs, mapped, orphanRows })
+      for (const m of mapped) if (m.base && m.textChanged && citesOn(m.base))
+        out.retextUnderEvidence.push({ id: `${key}:${m.tree}<=${m.base}`, cites: citesOn(m.base), old: b.acTexts[m.base], next: st.acTexts[m.tree] })
     }
-    // P-M4 — cite convergence, keyed (ac, path, symbol, kind).
+    // P-M4 cites
     const bSet = new Set(b.cites ?? []), tSet = new Set(st.cites)
     for (const c of st.cites) if (!bSet.has(c)) out.citesToAdd.push(c)
     for (const c of b.cites ?? []) if (!tSet.has(c)) out.citesVanished.push(c)
     out.citesIdentical += st.cites.filter(c => bSet.has(c)).length
   }
-  // P-M5 — three-way where the server state carries values.
-  const server = SERVER && existsSync(SERVER) ? JSON.parse(readFileSync(SERVER, 'utf8')) : null
-  const records = server?.records ?? null
-  if (!records) out.notes.push('server state carries no field values (pre-SKM-038 read-back) — three-way degrades to baseline-vs-tree; in-app edits cannot be detected until the read-back ships')
-  else for (const kind of ['stories', 'epics', 'journeys']) for (const [key, srv] of Object.entries(records[kind] ?? {})) {
-    const b = baseline[kind]?.[key]
-    if (!b) continue
-    for (const [field, sv] of Object.entries(srv.fields ?? {})) {
-      const bv = b.fields?.[field]
-      if (bv !== undefined && String(sv) !== String(bv))
-        out.threeWay.push({ kind, key, field, server: String(sv), baseline: String(bv) })
-    }
-  }
 }
 
-if (JSON_OUT) console.log(JSON.stringify(out, null, 2))
+if (JSON_OUT) { console.log(JSON.stringify(out, null, 2)) }
 else {
   if (out.firstSubmit) console.log(`  ${out.notes[0]}`)
-  if (out.textOnly.length) { console.log(`  scenario-A edits (frictionless):`); for (const t of out.textOnly) console.log(`    ${t}`) }
+  for (const t of out.textFree) console.log(`  ${t}`)
   if (out.citesToAdd.length) console.log(`  cites to ADD (${out.citesToAdd.length}): ${out.citesToAdd.slice(0, 5).join(' · ')}${out.citesToAdd.length > 5 ? ' …' : ''}`)
-  if (out.citesIdentical) console.log(`  cites identical (SKIP, never re-add — a pre-SKM-039 server would duplicate them): ${out.citesIdentical}`)
-  if (out.citesVanished.length) { console.log(`  cites VANISHED from the tree (FLAGGED, never deleted — a moved file is not a retraction; deleting evidence is a human act):`); for (const c of out.citesVanished) console.log(`    ${c}`) }
+  if (out.citesIdentical) console.log(`  cites identical (SKIP — SKM-039 makes a re-add a no-op, a pre-039 server would DUPLICATE): ${out.citesIdentical}`)
+  if (out.citesVanished.length) { console.log('  cites VANISHED from the tree (FLAGGED, never deleted — deleting evidence is a human act):'); for (const c of out.citesVanished) console.log(`    ${c}`) }
   for (const n of out.notes.slice(out.firstSubmit ? 1 : 0)) console.log(`  ${n}`)
 }
 
 let refused = false
 if (out.threeWay.length) {
   refused = true
-  console.log(`\n  REFUSED — the server moved since the last submit (in-app edits). Converging over them would clobber:`)
+  console.log('\n  REFUSED — the server moved since the last submit (in-app edits). Converging over them would clobber:')
   for (const t of out.threeWay) console.log(`    ${t.kind}/${t.key} · ${t.field}: server "${t.server}" ≠ baseline "${t.baseline}"`)
-  console.log('  Reconcile by hand (adopt the server value into the tree, or decide it), then re-run.')
-}
-if (out.acGate.length && !CONFIRM) {
-  refused = true
-  console.log(`\n  REFUSED — the AC set changed since the last submit (count/order/letters). Letters are ADDRESSES;`)
-  console.log('  rows keep their uuid, so a shifted re-submit would silently re-text rows whose citations/bugs still attest the OLD claim.')
-  for (const g of out.acGate) {
-    console.log(`    ${g.key}:`)
-    console.log(`      baseline: ${g.baseline.join(' ')}`)
-    console.log(`      tree:     ${g.tree.join(' ')}`)
+  console.log('  Reconcile by hand, then re-run. AC mapping is DEFERRED until this is resolved — one refusal at a time.')
+} else {
+  if (out.acPlans.length && !CONFIRM) {
+    refused = true
+    console.log('\n  REFUSED — the AC set changed since the last submit. Letters are ADDRESSES; rows keep their uuid.')
+    for (const g of out.acPlans) console.log(`    ${g.story}:\n      baseline: ${g.baseline.join(' ')}\n      tree:     ${g.tree.join(' ')}`)
+    console.log('  Deliberate? Re-run with --confirm-ac-changes; content matching then converges what is provably the same')
+    console.log('  and refuses the rest with ranked suggestions (thresholds rank, never decide).')
   }
-  console.log('  If this renumbering is deliberate, re-run with --confirm-ac-changes (the operator owns that call),')
-  console.log('  and record the decision (a key/AC renumber needs a decision record BEFORE re-submit — CONVENTIONS.md).')
-}
-if (out.acGate.length && CONFIRM && !out.threeWay.length) {
-  console.log(`\n  AC-set changes CONFIRMED by the operator (${out.acGate.length} story/ies) — proceeding. The renumber diff, for the record:`)
-  for (const g of out.acGate) {
-    console.log(`    ${g.key}:`)
-    console.log(`      baseline: ${g.baseline.join(' ')}`)
-    console.log(`      tree:     ${g.tree.join(' ')}`)
+  if (CONFIRM && out.unresolved.length) {
+    refused = true
+    console.log('\n  REFUSED — content matching left ambiguity; a score never moves data. Confirm each mapping or split:')
+    for (const u of out.unresolved) for (const s of u.suggestions)
+      console.log(`    tree ${u.tree} resembles receipt row ${s.bid} at ${s.s}% — confirm with --map ${u.tree}=${s.bid}, or --map ${u.tree}=new`)
+  }
+  if (out.retextUnderEvidence.length) {
+    if (!CONFIRM) refused = true
+    console.log(`\n  ${CONFIRM ? 'CONFIRMED (surfaced for the record)' : 'REFUSED'} — re-texting under evidence (P-M6): the row's citations attest the OLD wording:`)
+    for (const r of out.retextUnderEvidence) {
+      console.log(`    ${r.id} (${r.cites} citation(s)):`)
+      console.log(`      old: ${r.old.length > 70 ? r.old.slice(0, 70) + '…' : r.old}`)
+      console.log(`      new: ${r.next.length > 70 ? r.next.slice(0, 70) + '…' : r.next}`)
+    }
+    console.log('  SKM-040\'s trigger resets verification on re-text server-side; against a server predating SKM-040 the')
+    console.log('  verifier state does NOT auto-reset — run the verify sweep after submitting. ' + (CONFIRM ? '' : 'Proceed with --confirm-ac-changes.'))
+  }
+  if (CONFIRM && !refused && out.acPlans.length) {
+    console.log('\n  CONFIRMED — the convergence plan (rows keep uuids; letters recompute as display addresses):')
+    for (const g of out.acPlans) {
+      for (const m of g.mapped) {
+        if (m.base && m.tree === m.base && !m.textChanged) continue
+        if (m.base) console.log(`    ${g.story}: row ${m.base} → address ${m.tree}${m.textChanged ? ' + update_ac_text (surfaced above if evidenced)' : ' (text unchanged)'}`)
+        else console.log(`    ${g.story}: ${m.tree} is a NEW row (create_ac)`)
+      }
+      for (const o of g.orphanRows) console.log(`    ${g.story}: receipt row ${o} unmatched — ORPHAN-AC on the server; flagged, never deleted`)
+      console.log(`    ${g.story}: reorder to ${g.tree.join(' ')} recomputes the display addresses`)
+    }
+    console.log('  Record the mapping in the receipt when acking: --write --ack stories/<key> --map <tree>=<row> …')
   }
 }
 process.exit(refused ? 1 : 0)
