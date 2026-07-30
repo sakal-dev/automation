@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sakalmaster": {
+      "type": "http",
+      "url": "https://master-staging.sakal.dev/mcp"
+    }
+  }
+}
