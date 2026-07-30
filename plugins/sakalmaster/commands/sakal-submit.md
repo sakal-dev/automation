@@ -53,7 +53,13 @@ command that guesses is a command that surprises.
    frontmatter since A3.1 — mapping it to real keys is promote-time work,
    a human'"'"'s call.)
 6. **Always report whole-tree drift**, even for a scoped submit.
-7. **App profile → `sakal_update_app`.** When `config.yaml` carries an
+7. **Journey records → `p_narrative`.** A `journeys/<KEY>.md` body maps onto
+   `sakal_create_journey`/`sakal_update_journey`'"'"'s narrative param — and
+   **degrades gracefully while the server predates SKM-035**: an
+   unknown-param refusal means print exactly *"narrative held back; server
+   predates SKM-035"* and submit the journey'"'"'s index fields anyway. The
+   app_profile pattern, verbatim.
+8. **App profile → `sakal_update_app`.** When `config.yaml` carries an
    `app_profile:` block, map it onto the SKM-034 apps columns (`setup_cmd`,
    `verify_cmd`, `denylist`, `evidence_format`, `conventions_files`; the
    comma-separated fields become arrays) via `sakal_update_app` — and

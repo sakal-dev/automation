@@ -51,6 +51,7 @@ import {
   slug, parseSpec, acLetter, yamlUnquote, detectAcLines,
   renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals,
   CONSUMES_SLOT, expandConventionIncludes, denylistFromRules,
+  sectionByAnchor, readCollection, renderJourneyDoc,
   findDeclaration, findTestLabel, readScalars,
 } from './sakal-shared.mjs'
 
@@ -70,30 +71,41 @@ const outAbs = OUT ?? dirAbs
 const specsAbs = isAbsolute(SPECS) ? SPECS : join(ROOT, SPECS)
 const report = { emitted: [], uncited: [], dropped: [], carried: [], unresolvableImported: [], orphans: [], newStories: [], refusals: [], notes: [] }
 const die = m => { console.error(`REFUSED — ${m}`); process.exit(2) }
+const write = (relPath, content) => {
+  const abs = join(outAbs, relPath)
+  mkdirSync(dirname(abs), { recursive: true })
+  writeFileSync(abs, content)
+  report.emitted.push(relPath)
+}
 
 // ── the pin and the repo identity ───────────────────────────────────────────
+// Nullable here: the PROJECT-scope journeys mode runs unpinned when the tree
+// has no git home (stated, never invented). The APP-scope path asserts both
+// below — there the pin is load-bearing.
 const git = (...a) => execFileSync('git', ['-C', ROOT, ...a], { encoding: 'utf8' }).trim()
 let pin = opt('--pin', null)
-try { if (!pin) pin = git('rev-parse', '--short', 'HEAD') } catch { die('not a git repository — the sha pin is load-bearing and there is nothing to pin against') }
+try { if (!pin) pin = git('rev-parse', '--short', 'HEAD') } catch { pin = null }
 let repoId = null
 try {
   const url = git('remote', 'get-url', 'origin')
   const m = url.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/)
   if (m) repoId = m[1]
 } catch { /* no origin */ }
-if (!repoId) die('no `origin` remote — source URIs are `<owner>/<repo>:<path>@<sha>` and the owner/repo half must come from the repo, not a guess')
 
 const showCache = new Map()
 function gitShow(sha, path) {
   const k = `${sha}:${path}`
   if (showCache.has(k)) return showCache.get(k)
   let out = null
-  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:${path}`], { encoding: 'utf8' }) } catch { out = null }
+  // `sha:./path` resolves relative to the working directory, which is what a
+  // repo-root run AND a subdirectory spec-home (Business/ inside a parent
+  // repo) both need; bare `sha:path` is repo-root-relative and breaks the
+  // latter.
+  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:./${path}`], { encoding: 'utf8' }) } catch { out = null }
   showCache.set(k, out); return out
 }
 
 // ── inputs ──────────────────────────────────────────────────────────────────
-if (!existsSync(specsAbs)) die(`${SPECS}/ does not exist — prepare re-extracts from the spec set and there is none to read`)
 const cites = citesPath ? JSON.parse(readFileSync(citesPath, 'utf8')) : {}
 const profile = profilePath ? JSON.parse(readFileSync(profilePath, 'utf8')) : null
 // --seed: model-authored frontmatter for a FRESH tree (journey/persona/module
@@ -104,6 +116,56 @@ const seed = seedPath ? JSON.parse(readFileSync(seedPath, 'utf8')) : {}
 const cfgPath = join(dirAbs, 'config.yaml')
 const cfgText = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : ''
 const cfg = readScalars(cfgText)
+
+// ── PROJECT scope: the journeys tree (SKA-028, A5 ruling B) ─────────────────
+// One file per journey — frontmatter + VERBATIM narrative body — emitted from
+// journeys.yaml (the index) and each entry's source document. Same fidelity
+// doctrine as epic docs; pinned when the tree is git-versioned,
+// resolvable-but-unpinnable otherwise, stated either way.
+if ((cfg.scope?.value ?? '') === 'project') {
+  const jyPath = join(dirAbs, 'journeys.yaml')
+  if (!existsSync(jyPath)) die(`${DIR}/journeys.yaml does not exist — the index is what names the journeys to emit`)
+  const entries = readCollection(readFileSync(jyPath, 'utf8'), 'journeys')
+  if (!entries.length) die(`${DIR}/journeys.yaml has no journey entries`)
+
+  const pinned = pin != null && repoId != null
+  if (!pinned) report.notes.push('spec-home is not git-versioned (or has no origin): journey sources are RESOLVABLE BUT UNPINNABLE — the fidelity gate falls back to the working tree with its stated note. A weaker guarantee; give the tree a git home to end it.')
+
+  for (const e of [...entries].sort((a, b) => a.key.localeCompare(b.key, 'en'))) {
+    const src = e.fields.source
+    if (!src) { report.refusals.push(`${e.key}: no source in journeys.yaml — the record needs the document that justifies it`); continue }
+    const [srcPath, anchor] = src.split('#')
+    const abs = join(ROOT, srcPath.trim())
+    if (!existsSync(abs)) { report.refusals.push(`${e.key}: source ${srcPath.trim()} does not exist — nothing to import`); continue }
+    const wt = readFileSync(abs, 'utf8')
+    if (pinned) {
+      const atPin = gitShow(pin, srcPath.trim())
+      if (atPin == null) die(`${srcPath.trim()} is not in git at ${pin} — commit it; the pin must be truthful`)
+      if (atPin !== wt) die(`${srcPath.trim()} differs from ${pin} in the working tree — commit the edits first`)
+    }
+    const section = anchor ? sectionByAnchor(wt, anchor) : null
+    if (!section) { report.refusals.push(`${e.key}: no section matching "#${anchor ?? '(none)'}" in ${srcPath.trim()} — refused rather than emit an empty record`); continue }
+    if (!e.fields.goal || !e.fields.persona) report.notes.push(`${e.key}: journeys.yaml carries no ${!e.fields.goal ? 'goal' : 'persona'} — emitted as-is; verify will name it`)
+    write(`journeys/${e.key}.md`, renderJourneyDoc({
+      key: e.key, title: e.label, goal: e.fields.goal ?? '', persona: e.fields.persona ?? '',
+      sourcePath: srcPath.trim(), anchor: anchor?.trim() || null,
+      repoId: pinned ? repoId : null, pin: pinned ? pin : null,
+      body: section.raw,
+    }))
+  }
+
+  console.log(`\n  prepare journeys tree — ${pinned ? `pin ${pin} · repo ${repoId}` : 'UNPINNED (no git home)'} · scope: project`)
+  console.log(`  ${report.emitted.length} journey record(s) emitted from ${entries.length} index entries\n`)
+  if (report.refusals.length) { console.log('  REFUSED (loudly, per entry):'); for (const x of report.refusals) console.log(`    ${x}`) }
+  for (const n of report.notes) console.log(`  ${n}`)
+  console.log('\n  journeys.yaml stays the index; the files are the records. Next: /sakal-verify.\n')
+  process.exit(0)
+}
+
+// ── APP scope from here down: the pin is load-bearing ───────────────────────
+if (!pin) die('not a git repository — the sha pin is load-bearing for an app-scope re-extract and there is nothing to pin against')
+if (!repoId) die('no `origin` remote — source URIs are `<owner>/<repo>:<path>@<sha>` and the owner/repo half must come from the repo, not a guess')
+if (!existsSync(specsAbs)) die(`${SPECS}/ does not exist — prepare re-extracts from the spec set and there is none to read`)
 const APP = cfg.app?.value ?? null
 if (!APP) die(`${DIR}/config.yaml has no \`app\` — the epic and story frontmatter carry it, and it is a declaration, not a guess`)
 
@@ -177,12 +239,6 @@ function confirmCite(c, where) {
 }
 
 // ── emit ────────────────────────────────────────────────────────────────────
-const write = (relPath, content) => {
-  const abs = join(outAbs, relPath)
-  mkdirSync(dirname(abs), { recursive: true })
-  writeFileSync(abs, content)
-  report.emitted.push(relPath)
-}
 
 // ── parse every spec, then HOLD at the S1 gate before writing anything ──────
 // S1 (A2), the core invariant of this task: prepare counts AC-LIKE lines per

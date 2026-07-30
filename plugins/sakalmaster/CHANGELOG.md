@@ -3,6 +3,32 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.9.0 — journeys as a walked tree (SKA-028 · A5 ruling B)
+
+The journey narratives join the fidelity-gated working copy — one file per
+journey, same gate shape as epic docs, no new semantics invented.
+
+- **Prepare (project scope)** emits `.sakal/journeys/<KEY>.md` from
+  journeys.yaml (the index) + each entry's source document: frontmatter
+  (key, title, goal, persona, source) + the VERBATIM `## Journey …` section
+  (steps, per-step epic pointers — never rewritten to URIs — Success
+  statements, tiering notes in the heading). Pinned when the tree is
+  git-versioned; resolvable-but-unpinnable otherwise, stated in the report.
+  Works from a subdirectory spec-home inside a parent repo (`sha:./path`).
+- **Verify walks `journeys/`** exactly as it walks epic docs: frontmatter +
+  goal/persona refs, body fidelity BOTH directions at the pin, imported-text
+  exemption. Index entry without a record → `JMISSING` warning (legitimate
+  mid-authoring); record without an index entry → `JORPHAN` error (submit
+  iterates the index — it would silently skip the record). An app-scoped
+  tree defining `journeys/` is a `PROJECTDEF` error.
+- **Submit** maps the record body → the journey narrative param
+  (`p_narrative`), degrading gracefully while the server predates SKM-035
+  ("narrative held back; server predates SKM-035") — the app_profile
+  pattern verbatim. `journeys/` is selectable.
+- D-05 convergence proven: the 7 owner journeys emit byte-exact against the
+  spec-home import at `sakal-dev/sakalpos@9cf7c6f`, verify green, two runs
+  byte-identical.
+
 ## 0.8.0 — PART 0 amendments + promote consumers (SKA-027 · A3/A4 rulings)
 
 The A4 profile gates and the A3.1 reversal that SKA-026 shipped without.

@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseSpec, detectAcLines, renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals } from '../../lib/sakal-shared.mjs'
+import { parseSpec, detectAcLines, renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals, sectionByAnchor, renderJourneyDoc, readCollection } from '../../lib/sakal-shared.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const read = p => readFileSync(join(here, p), 'utf8')
@@ -200,6 +200,34 @@ console.log('\n── raw markers survive as the SNAPSHOT bytes (multi-codepoint
   const exotic = spec.stories.flatMap(s => s.acs).filter(a => !['[ ]', '[x]', '[X]'].includes(a.marker))
   eq(exotic.map(a => a.marker).join(' '), '[🟡] [🟡]', 'the two [🟡] markers captured with the snapshot\'s own bytes')
   eq(text.includes(exotic[0].marker), true, 'marker bytes are substrings of the input — no NFC/NFD drift, no retyped lookalikes')
+}
+
+// ── journeys as a walked tree (SKA-028, A5 ruling B) ────────────────────────
+// Input: snapshot of the D-05 spec-home import (sakal-dev/sakalpos @9cf7c6f).
+// The record = frontmatter + the VERBATIM `## Journey <X> — …` section:
+// steps, per-step epic pointers, Success statement, tiering note in the
+// heading — imported text, never rewritten (epic pointers stay `→ *OA-02*`,
+// never URIs: P6 governs authored source: fields only).
+console.log('\n── journey records (frontmatter + verbatim narrative)')
+{
+  const text = read('inputs/journeys/owner-app-journeys.md')
+  const ctx = { key: 'OA-J1', title: 'The morning glance: know the state of the business in 15 seconds', goal: 'OA-G1', persona: 'owner', sourcePath: 'specs/journeys/owner-app-journeys.md', anchor: 'journey-a' }
+  const s = sectionByAnchor(text, 'journey-a')
+  eq(s.heading, 'Journey A — The morning glance (MVP)', 'anchor prefix-matches the full heading; tier note rides the heading')
+  eq(s.raw.startsWith('## Journey A — The morning glance (MVP)'), true, 'section raw includes its heading')
+  eq(/→ \*OA-02\*/.test(s.raw), true, 'per-step epic pointers imported verbatim, never rewritten')
+  eq(/\*\*Success:\*\*/.test(s.raw), true, 'Success statement carried')
+  eq(s.raw.endsWith('---') || /\n\s*$/.test(s.raw), false, 'trailing rule/blank trimmed — typography, not record')
+  eq(renderJourneyDoc({ ...ctx, repoId: 'sakal-dev/sakalpos', pin: '9cf7c6f', body: s.raw }), read('expected/journeys/OA-J1.md'), 'journeys/OA-J1.md == expected (pinned)')
+  // The unpinnable spec-home: same record, plain resolvable source — stated,
+  // never invented.
+  eq(renderJourneyDoc({ ...ctx, repoId: null, pin: null, body: s.raw }).split('\n')[5], 'source: specs/journeys/owner-app-journeys.md#journey-a', 'no git home → resolvable-but-unpinnable source, no invented pin')
+  eq(sectionByAnchor(text, 'journey-zz'), null, 'unknown anchor → null, the emitter refuses rather than emit empty')
+  // Determinism: two extract+render passes byte-identical.
+  eq(renderJourneyDoc({ ...ctx, repoId: 'sakal-dev/sakalpos', pin: '9cf7c6f', body: sectionByAnchor(text, 'journey-a').raw }), renderJourneyDoc({ ...ctx, repoId: 'sakal-dev/sakalpos', pin: '9cf7c6f', body: s.raw }), 'two passes byte-identical')
+  // readCollection reads the index grammar the emitter consumes.
+  const idx = readCollection('journeys:\n  - OA-J1 — The label\n    goal: OA-G1\n    persona: owner\n    source: specs/x.md#journey-a\n', 'journeys')
+  eq(idx.length === 1 && idx[0].key === 'OA-J1' && idx[0].fields.source === 'specs/x.md#journey-a', true, 'index entries parse: key, label, fields')
 }
 
 console.log(`\n${fail ? 'FAILED' : 'OK'} — ${pass} passed, ${fail} failed\n`)

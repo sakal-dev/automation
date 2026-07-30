@@ -34,8 +34,8 @@ import { execFileSync } from 'node:child_process'
 // the checker parses the spec with the same function the emitter emitted from.
 import {
   stripInlineComment, unquote, slug, anchorMatches, anchorMatchesText,
-  parseSourceURI, parseSpec, FAMILIES, consumesOf, normWS, yamlUnquote,
-  findDeclaration, findTestLabel,
+  parseSourceURI, parseSpec, FAMILIES, consumesOf, sectionByAnchor, normWS,
+  yamlUnquote, findDeclaration, findTestLabel,
 } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
@@ -154,7 +154,9 @@ function gitShow(sha, path) {
   const k = `${sha}:${path}`
   if (showCache.has(k)) return showCache.get(k)
   let out = null
-  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:${path}`], { encoding: 'utf8' }) } catch { out = null }
+  // `sha:./path` is cwd-relative — correct at a repo root AND in a
+  // subdirectory spec-home (Business/ inside a parent repo).
+  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:./${path}`], { encoding: 'utf8' }) } catch { out = null }
   showCache.set(k, out); return out
 }
 let originRepo = null
@@ -379,6 +381,54 @@ const epicDocs = new Map()
     if (fm.title?.value && spec.title && normWS(fm.title.value) !== normWS(spec.title))
       warn(f, fm.title.line, 'FIDELITY', `title differs from the spec H1 ("${spec.title}")`, 'titles are authored from the heading; drift is worth a look')
   }
+}
+
+// ── journey records: .sakal/journeys/<KEY>.md (SKA-028, A5 ruling B) ────────
+// Walked exactly as epic docs are: frontmatter checks, body fidelity both
+// directions, imported-text exemption. journeys.yaml stays the index (submit
+// iterates it); the file is the record — so an index entry without a record
+// is a WARNING (authoring in progress), but a record without an index entry
+// is an ERROR: submit would silently skip it.
+{
+  const dir = join(dirAbs, 'journeys')
+  if (existsSync(dir) && scope === 'app')
+    err(`${DIR}/journeys/`, 1, 'PROJECTDEF', 'an app-scoped .sakal/ must not DEFINE project-layer journey records', 'journeys live in the spec-home repo; reference keys instead')
+  const seen = new Set()
+  if (existsSync(dir) && scope !== 'app') for (const name of readdirSync(dir).filter(n => n.endsWith('.md')).sort()) {
+    const p = join(dir, name), f = rel(p)
+    const lines = readFileSync(p, 'utf8').split('\n')
+    if (lines[0].trim() !== '---') { err(f, 1, 'NOFM', 'file does not start with a `---` front-matter block', 'the first line must be exactly `---`'); continue }
+    const end = lines.indexOf('---', 1)
+    if (end < 0) { err(f, 1, 'NOFM', 'front-matter is never closed with `---`', 'add a closing `---`'); continue }
+    const fm = parseKV(lines.slice(1, end).join('\n'), f, 2)
+    const key = fm.key?.value
+    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
+    if (name !== `${key}.md`) err(f, fm.key.line, 'KEYFMT', `file is ${name} but key is "${key}"`, 'journey records are named <KEY>.md')
+    seen.add(key)
+    if (!journeys.has(key)) err(f, fm.key.line, 'JORPHAN', `journey "${key}" is not in journeys.yaml`, 'the index is what submit iterates — a record without an entry would be silently skipped; add it to journeys.yaml')
+    for (const k of ['title', 'goal', 'persona'])
+      if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on a journey record`, 'prepare writes it from journeys.yaml')
+    if (fm.goal?.value && goals.size && !goals.has(fm.goal.value)) err(f, fm.goal.line, 'REF', `goal "${fm.goal.value}" is not declared`, 'add it to registry/goals.yaml')
+    if (fm.persona?.value && personas.size && !personas.has(fm.persona.value)) err(f, fm.persona.line, 'REF', `persona "${fm.persona.value}" is not declared`, 'add it to registry/personas.yaml')
+
+    const body = lines.slice(end + 1).join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
+    if (!body.trim()) { err(f, end + 2, 'FIDELITY', `journey ${key} has an empty narrative body`, 'the record IS the narrative; re-run prepare'); continue }
+    const srcVal = fm.source?.value
+    if (!srcVal) { err(f, fm.key.line, 'NOSRC', `journey ${key} has no \`source:\``, 'the narrative is imported; its document must be named'); continue }
+    const uri = parseSourceURI(srcVal)
+    const r = resolvePinned(uri, f, fm.source.line, `journey ${key}`)
+    if (!r.content) continue
+    const section = uri.anchor ? sectionByAnchor(r.content, uri.anchor) : null
+    if (!section) { err(f, fm.source.line, 'SRCANCHOR', `source resolves ${r.how} but has no section matching "#${uri.anchor ?? '(none)'}"`, 'repoint the anchor, or re-run prepare'); continue }
+    // P4 for journeys: the body is the section VERBATIM (normalised
+    // whitespace only), both directions — imported narrative is never
+    // improved, and epic pointers inside it are never rewritten to URIs.
+    if (normWS(body) !== normWS(section.raw))
+      err(f, end + 2, 'FIDELITY', `journey ${key} body differs from the spec section ${r.how}`, 'verbatim means verbatim — re-run prepare rather than edit an import')
+  }
+  if (scope !== 'app') for (const [key, j] of journeys)
+    if (!seen.has(key))
+      warn(`${DIR}/journeys.yaml`, j.line, 'JMISSING', `journey "${key}" has no journeys/${key}.md record`, 'legitimate mid-authoring — the index names it, the record does not exist yet; prepare emits it')
 }
 
 // ── stories ──────────────────────────────────────────────────────────────────

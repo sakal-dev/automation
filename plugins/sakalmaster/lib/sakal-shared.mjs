@@ -552,6 +552,67 @@ export function denylistFromRules(text) {
   return globs
 }
 
+// ── journeys as a walked tree (SKA-028, A5 ruling: option B) ────────────────
+// One file per journey: frontmatter + VERBATIM narrative body. The body is
+// the same kind of thing an epic section is — imported narrative that must
+// survive byte-exact — so the fidelity gate keeps one shape across layers.
+// journeys.yaml stays the index (keys/labels); the file is the record.
+
+/** The `## ` section of `text` whose heading slugs to `anchor` (prefix match,
+ *  same slugger both sides). Returns { heading, body, raw } — `raw` includes
+ *  the heading line, trimmed of blank edges — or null. Used by the emitter
+ *  AND the fidelity gate: one extractor, nowhere for a second copy to hide. */
+export function sectionByAnchor(text, anchor) {
+  const want = slug(anchor)
+  const lines = String(text).split('\n').map(l => l.replace(/\r$/, ''))
+  let start = -1, heading = null
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(.*?)\s*$/)
+    if (!m) continue
+    if (start >= 0) {
+      const body = lines.slice(start, i)
+      return trimSection(heading, body)
+    }
+    const s = slug(m[1])
+    if (s === want || s.startsWith(want)) { start = i; heading = m[1] }
+  }
+  if (start < 0) return null
+  return trimSection(heading, lines.slice(start))
+}
+function trimSection(heading, bodyLines) {
+  const b = [...bodyLines]
+  while (b.length && !b.at(-1).trim()) b.pop()
+  // A trailing `---` rule belongs to the document's typography, not the record.
+  while (b.length && (b.at(-1).trim() === '---' || !b.at(-1).trim())) b.pop()
+  return { heading, raw: b.join('\n') }
+}
+
+/** Read a `.sakal` collection file (journeys.yaml grammar) WITHOUT verify's
+ *  error plumbing: `- KEY — label` entries + indented `field: value` lines. */
+export function readCollection(text, collection) {
+  const entries = []
+  let current = null
+  for (const rawLine of String(text).split('\n')) {
+    const l = rawLine.replace(/\r$/, '')
+    if (!l.trim() || l.trim().startsWith('#')) continue
+    if (new RegExp(`^${collection}\\s*:\\s*$`).test(l)) continue
+    const item = l.match(/^\s*-\s+(\S+)\s+—\s+(.*)$/)
+    if (item) { current = { key: item[1], label: stripInlineComment(item[2]).trim(), fields: {} }; entries.push(current); continue }
+    const sub = l.match(/^\s+([A-Za-z_]+)\s*:\s*(.*)$/)
+    if (sub && current) current.fields[sub[1]] = unquote(stripInlineComment(sub[2]))
+  }
+  return entries
+}
+
+/** Journey record: frontmatter (key, title, goal, persona, source) + the
+ *  VERBATIM section. `pin`/`repoId` null → resolvable-but-unpinnable source,
+ *  exactly as stated in the emission report. */
+export function renderJourneyDoc({ key, title, goal, persona, sourcePath, anchor, repoId, pin, body }) {
+  const src = `${repoId ? `${repoId}:` : ''}${sourcePath}${anchor ? `#${anchor}` : ''}${pin ? `@${pin}` : ''}`
+  const fm = [`key: ${key}`, `title: ${title}`, `goal: ${goal}`, `persona: ${persona}`, `source: ${src}`]
+  return `---\n${fm.join('\n')}\n---\n\n${body}\n`
+}
+
 // ── ONE declaration / test-label matcher ────────────────────────────────────
 // The cite-honesty rule made mechanical: `enforced` needs an exact-name
 // DECLARATION in the cited file; `verified` needs the exact innermost
