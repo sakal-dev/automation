@@ -110,7 +110,7 @@ on:
         type: string
         default: ubuntu-latest
       sakal_env:
-        description: "production | staging. Empty resolves to PRODUCTION. Callers pass ${{ vars.SAKAL_ENV }}; only platform repos set that variable."
+        description: "production | staging. Empty resolves to PRODUCTION. Callers pass the SAKAL_ENV repository variable; only platform repos set it."
         type: string
         default: ""
       sakal_supabase_url:
