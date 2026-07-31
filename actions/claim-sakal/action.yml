@@ -46,6 +46,14 @@ inputs:
   source:
     description: "What this run is DOING (asserted intent): github-sweep | github-mention | send-to-claude | manual. REQUIRED — no default, because a default silently lies for any caller it wasn't written for (session 12 audit). The runtime itself is DERIVED by SakalMaster from the credential into agent_runs.method; never restate it here."
     required: true
+  task_key:
+    description: "CLAIM BY NAME (SKA-037): a task key from a targeted dispatch. Set → start_task_run (this task or nothing); empty → claim_next_task (take the head of the queue). The two are one step because they share one auth path — a second copy of the OIDC exchange is a second place for it to rot."
+    required: false
+    default: ""
+  on_refusal:
+    description: "What a server REFUSAL means to the caller: 'fail' (a queue claim that errors is a broken runner) | 'stand-down' (a named dispatch the server declines — already leased, not ready, method excluded — is a CLEAN outcome: claimed=false, refusal quoted, exit 0)."
+    required: false
+    default: "fail"
   lease_seconds:
     description: Lease duration; heartbeats extend it
     required: false
@@ -55,6 +63,9 @@ outputs:
   claimed:
     description: "'true' if a task was claimed"
     value: ${{ steps.claim.outputs.claimed }}
+  refusal:
+    description: "The server's teaching refusal, VERBATIM, when a named claim stood down (empty otherwise). Quote it — do not paraphrase a refusal you did not write."
+    value: ${{ steps.claim.outputs.refusal }}
   run_id:
     description: The agent_runs id owning the lease
     value: ${{ steps.claim.outputs.run_id }}
@@ -85,6 +96,8 @@ runs:
         IN_APP: ${{ inputs.app }}
         SRC: ${{ inputs.source }}
         LEASE: ${{ inputs.lease_seconds }}
+        TASK_KEY: ${{ inputs.task_key }}
+        ON_REFUSAL: ${{ inputs.on_refusal }}
         OIDC_AUDIENCE: sakalmaster
       run: |
         set -euo pipefail
@@ -114,19 +127,48 @@ runs:
           [ -n "$JWT" ] || { echo "::error::token-exchange failed — check the PAT"; exit 1; }
           PROJECT="$IN_PROJECT"; APP="$IN_APP"
         fi
-        payload="{\"p_project\":\"$PROJECT\",\"p_source\":\"$SRC\",\"p_lease_seconds\":$LEASE"
-        # The app filter is ALWAYS applied when an app is known (invariant 4);
-        # on the OIDC path it always is — the mapping is the enforcement.
-        if [ -n "$APP" ]; then payload="$payload,\"p_app\":\"$APP\""; fi
-        payload="$payload}"
+        # TWO CLAIMS, ONE AUTH PATH. Unnamed: take the head of the queue
+        # (claim_next_task). NAMED (SKA-037 targeted dispatch): this task or
+        # nothing (start_task_run) — the server decides whether the task is
+        # claimable and its refusal is the teaching text we quote.
+        if [ -n "$TASK_KEY" ]; then
+          RPC_NAME="start_task_run"
+          payload="{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK_KEY\",\"p_source\":\"$SRC\",\"p_lease_seconds\":$LEASE}"
+        else
+          RPC_NAME="claim_next_task"
+          payload="{\"p_project\":\"$PROJECT\",\"p_source\":\"$SRC\",\"p_lease_seconds\":$LEASE"
+          # The app filter is ALWAYS applied when an app is known (invariant 4);
+          # on the OIDC path it always is — the mapping is the enforcement.
+          if [ -n "$APP" ]; then payload="$payload,\"p_app\":\"$APP\""; fi
+          payload="$payload}"
+        fi
         # Status-aware: a method rejection is a 42501 with SakalMaster's own
         # operator message, which -sf would swallow. Capture body + code.
         BODY=$(mktemp)
-        CODE=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/claim_next_task" \
+        CODE=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/$RPC_NAME" \
           -H "apikey: $ANON" -H "authorization: Bearer $JWT" \
           -H "content-type: application/json" -d "$payload")
         if [ "$CODE" != "200" ]; then
           MSG=$(jq -r '.message // .hint // .' "$BODY" 2>/dev/null || cat "$BODY")
+          # A NAMED claim the server declines is a clean outcome, not a red
+          # run: already leased, not agent-ready, method excluded — each is
+          # the server teaching us something in its own words. Quote it and
+          # stand down. (PGRST202 = the RPC does not exist on this server yet:
+          # forward-compatible with SKM-046 not being deployed.)
+          if [ "$ON_REFUSAL" = "stand-down" ]; then
+            case "$CODE" in
+              404) MSG="${MSG} (start_task_run is not on this server yet — SKM-046 undeployed; the dispatch cannot be claimed by name here)" ;;
+            esac
+            {
+              echo "claimed=false"
+              echo "refusal<<SAKAL_REFUSAL_EOF"
+              echo "$MSG"
+              echo "SAKAL_REFUSAL_EOF"
+            } >> "$GITHUB_OUTPUT"
+            rm -f "$BODY"
+            echo "::notice::STAND DOWN — the server declined this named claim (HTTP $CODE): $MSG"
+            exit 0
+          fi
           case "$MSG" in
             *"accepts work from"*)
               # POLICY STOP (session 12 STEP 3): the app does not accept work
@@ -144,9 +186,21 @@ runs:
           echo "project=$PROJECT"
           echo "app=$APP"
         } >> "$GITHUB_OUTPUT"
-        RUN=$(jq -r '.[0].run_id // empty' <<<"$CLAIM")
+        RUN=$(jq -r 'if type == "array" then .[0].run_id else .run_id end // empty' <<<"$CLAIM")
         if [ -z "$RUN" ]; then
           echo "claimed=false" >> "$GITHUB_OUTPUT"
+          # A NAMED claim that returns no row is the server saying "not this
+          # one" without an error — still a stand-down, never a fallthrough
+          # to some other task.
+          if [ -n "$TASK_KEY" ]; then
+            {
+              echo "refusal<<SAKAL_REFUSAL_EOF"
+              echo "start_task_run returned no run for task $TASK_KEY — the server did not grant this claim (already leased, retired, or not claimable)."
+              echo "SAKAL_REFUSAL_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::STAND DOWN — no run granted for named task $TASK_KEY"
+            exit 0
+          fi
           # Paused and empty both return NO ROWS by design (a paused app must not
           # fail a cron red every ten minutes). They mean different things to an
           # operator, so name which one — one cheap read, on the cheap path.
@@ -160,10 +214,13 @@ runs:
           fi
           exit 0
         fi
+        # start_task_run may answer with an object, claim_next_task with a
+        # one-row array — read both shapes rather than betting on one.
+        pick() { jq -r "if type == \"array\" then .[0].$1 else .$1 end // empty" <<<"$CLAIM"; }
         {
           echo "claimed=true"
           echo "run_id=$RUN"
-          echo "task_key=$(jq -r '.[0].task_key // empty' <<<"$CLAIM")"
-          echo "story_key=$(jq -r '.[0].story_key // empty' <<<"$CLAIM")"
+          echo "task_key=$(pick task_key)"
+          echo "story_key=$(pick story_key)"
         } >> "$GITHUB_OUTPUT"
-        echo "::notice::Claimed $(jq -r '.[0].task_key' <<<"$CLAIM") (run $RUN)"
+        echo "::notice::Claimed $(pick task_key) (run $RUN)"

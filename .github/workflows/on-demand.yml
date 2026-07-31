@@ -59,8 +59,25 @@ on:
         description: Runner label
         type: string
         default: ubuntu-latest
+      sakal_env:
+        description: "SakalMaster environment for the INTEGRATED branch: production | staging (empty = production)"
+        type: string
+        default: ""
+      sakal_supabase_url:
+        description: Explicit SakalMaster URL (self-hosted escape hatch; overrides sakal_env)
+        type: string
+        default: ""
+      sakal_supabase_publishable_key:
+        description: Explicit publishable key (public by design; set together with the URL)
+        type: string
+        default: ""
+      extra_instructions:
+        description: Repo-specific additions appended to the integrated agent prompt (never loosens the guardrails)
+        type: string
+        default: ""
     # Secrets via `secrets: inherit` from the caller (org-level):
     #   CLAUDE_CODE_OAUTH_TOKEN — the Claude Code subscription token
+    #   SAKAL_TOKEN — optional PAT fallback; the integrated branch prefers OIDC
 
 jobs:
   claude:
@@ -82,13 +99,66 @@ jobs:
       id-token: write
       actions: read
     steps:
+      # ── SKA-037: is this a TARGETED DISPATCH from SakalMaster? ────────────
+      # The frozen interface (SKM-046 emits it): an @claude comment carrying
+      # one machine line, `sakal-task: <project-id>/<task-key>`. Everything
+      # else in the comment is prose for the human reading the issue.
+      #
+      # Three outcomes, and the third is the point: a comment with NO machine
+      # line is today's label-blind path, byte-identical; a well-formed line
+      # is the integrated branch; a line that is PRESENT BUT UNPARSEABLE is a
+      # STAND-DOWN. A dispatch that half-executes as an untracked run is the
+      # worst outcome of the three — worse than doing nothing — because the
+      # server believes a task is running that nothing will ever report on.
+      - name: Detect SakalMaster dispatch
+        id: dispatch
+        env:
+          BODY: ${{ github.event.comment.body || github.event.review.body || github.event.issue.body || '' }}
+        run: |
+          set -uo pipefail
+          mode=label-blind; project=""; task=""; line=""
+          if grep -qi '^[[:space:]]*sakal-task:' <<<"$BODY"; then
+            line=$(grep -i -m1 '^[[:space:]]*sakal-task:' <<<"$BODY" | tr -d '\r')
+            ref=$(sed -E 's/^[[:space:]]*[Ss]akal-task:[[:space:]]*//; s/[[:space:]]+$//' <<<"$line")
+            if [[ "$ref" =~ ^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([A-Za-z0-9._-]+)$ ]]; then
+              project="${BASH_REMATCH[1]}"; task="${BASH_REMATCH[2]}"; mode=integrated
+            else
+              mode=malformed
+            fi
+          fi
+          {
+            echo "mode=$mode"
+            echo "project=$project"
+            echo "task=$task"
+            echo "received=$line"
+          } >> "$GITHUB_OUTPUT"
+          case "$mode" in
+            integrated) echo "::notice::targeted dispatch: task $task (project $project)" ;;
+            malformed)  echo "::warning::a sakal-task: line was present but did not parse — standing down rather than running untracked" ;;
+            *)          echo "::notice::no sakal-task: line — label-blind @claude path (unchanged)" ;;
+          esac
+
+      # A dispatch we cannot resolve gets a comment naming EXACTLY what was
+      # received, and nothing else happens. Never guess a task key.
+      - name: Stand down (malformed dispatch)
+        if: ${{ steps.dispatch.outputs.mode == 'malformed' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ github.event.issue.number }}
+          RECEIVED: ${{ steps.dispatch.outputs.received }}
+        run: |
+          set -uo pipefail
+          [ -n "${N:-}" ] || { echo "::warning::no issue to comment on"; exit 0; }
+          gh issue comment "$N" -R "$REPO" --body "$(printf '**Stood down — the dispatch line did not parse.**\n\nReceived:\n\n```\n%s\n```\n\nExpected exactly:\n\n```\nsakal-task: <project-uuid>/<task-key>\n```\n\nNo task was claimed and no work was started: a dispatch that half-executes as an untracked run is worse than one that does nothing, because SakalMaster would believe a run is in flight that nothing will report on. Fix the line and dispatch again.' "$RECEIVED")" || true
+
       # Claim the issue with claude-working MECHANICALLY — guaranteed, unlike
       # a prompt instruction. Only for real issues (not PRs). If the label is
       # already present, another run owns it: the work steps below are skipped
       # (stand-down), and the release step will not touch the label.
       - name: Claim issue (claude-working)
         id: claim
-        if: ${{ github.event.issue.number && !github.event.issue.pull_request }}
+        if: ${{ steps.dispatch.outputs.mode != 'malformed' && github.event.issue.number && !github.event.issue.pull_request }}
         uses: sakal-dev/automation/actions/claim-github@v2
         with:
           mode: claim
@@ -101,7 +171,7 @@ jobs:
       # yesterday. Same gate, same reason; cheap (one API read).
       - name: Authority gate (pre-flight)
         id: authority
-        if: ${{ steps.claim.outputs.already-owned != 'true' && github.event.issue.number }}
+        if: ${{ steps.dispatch.outputs.mode != 'malformed' && steps.claim.outputs.already-owned != 'true' && github.event.issue.number }}
         uses: sakal-dev/automation/actions/authority-gate@v2
         with:
           mode: scan
@@ -109,7 +179,7 @@ jobs:
           issues: ${{ github.event.issue.number }}
 
       - name: Checkout repository
-        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        if: ${{ steps.dispatch.outputs.mode != 'malformed' && steps.claim.outputs.already-owned != 'true' }}
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -119,7 +189,7 @@ jobs:
       # token does NOT trigger CI (loop prevention), so without this an
       # @claude PR could carry no verification at all.
       - name: Set up project (./tool/setup.sh)
-        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        if: ${{ steps.dispatch.outputs.mode != 'malformed' && steps.claim.outputs.already-owned != 'true' }}
         uses: sakal-dev/automation/actions/setup-project@v2
 
       # Model from the issue's labels: `opus` / `sonnet` / `fable`; with none,
@@ -127,7 +197,7 @@ jobs:
       # CLAUDE_CODE_OAUTH_TOKEN subscription plan.)
       - name: Pick model from labels
         id: model
-        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        if: ${{ steps.dispatch.outputs.mode != 'malformed' && steps.claim.outputs.already-owned != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           N: ${{ github.event.issue.number }}
@@ -146,9 +216,207 @@ jobs:
           echo "name=$model" >> "$GITHUB_OUTPUT"
           echo "::notice::Model for #${N:-?}: $model"
 
+      # ══ INTEGRATED BRANCH (SKA-037) ══════════════════════════════════════
+      # Everything below through "Judge and report" runs ONLY for a targeted
+      # dispatch. The discipline is sweep.yml's, for the reason sweep learned
+      # it the hard way (v2.0.1): lifecycle duties delegated to prompt text
+      # silently didn't happen. The engine owns SOURCE / BRIEF / REPORT in
+      # steps; the agent only executes.
+      - name: Resolve SakalMaster environment
+        id: env
+        if: ${{ steps.dispatch.outputs.mode == 'integrated' && steps.claim.outputs.already-owned != 'true' }}
+        uses: sakal-dev/automation/actions/resolve-env@v2
+        with:
+          sakal_env: ${{ inputs.sakal_env }}
+          sakal_supabase_url: ${{ inputs.sakal_supabase_url }}
+          sakal_supabase_publishable_key: ${{ inputs.sakal_supabase_publishable_key }}
+
+      # CLAIM BY NAME. Not "take the next task" — THIS task or nothing. The
+      # server owns the verdict (already leased, not agent-ready, method
+      # excluded), and its refusal is teaching text we quote rather than
+      # paraphrase. A refusal is a CLEAN outcome: no label churn, exit 0.
+      - name: Claim the dispatched task
+        id: sclaim
+        if: ${{ steps.dispatch.outputs.mode == 'integrated' && steps.claim.outputs.already-owned != 'true' }}
+        uses: sakal-dev/automation/actions/claim-sakal@v2
+        with:
+          sakal_supabase_url: ${{ steps.env.outputs.url }}
+          sakal_supabase_publishable_key: ${{ steps.env.outputs.publishable_key }}
+          token: ${{ secrets.SAKAL_TOKEN }}
+          project: ${{ steps.dispatch.outputs.project }}
+          task_key: ${{ steps.dispatch.outputs.task }}
+          source: github-mention
+          on_refusal: stand-down
+
+      - name: Stand down (server declined the claim)
+        if: ${{ steps.dispatch.outputs.mode == 'integrated' && steps.claim.outputs.already-owned != 'true' && steps.sclaim.outputs.claimed != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          N: ${{ github.event.issue.number }}
+          TASK: ${{ steps.dispatch.outputs.task }}
+          REFUSAL: ${{ steps.sclaim.outputs.refusal }}
+        run: |
+          set -uo pipefail
+          echo "::notice::stood down on $TASK — no work started"
+          [ -n "${N:-}" ] || exit 0
+          gh issue comment "$N" -R "$REPO" --body "$(printf '**Stood down — SakalMaster did not grant the claim on `%s`.**\n\nThe server said:\n\n> %s\n\nNothing was started and no run is in flight. This is a clean outcome, not a failure: another runner may hold the lease, the task may not be agent-ready, or this method may be excluded for the app.' "$TASK" "${REFUSAL:-(no message returned)}")" || true
+
+      # BRIEF, fetched MECHANICALLY — the task, the story, and every AC with
+      # its DERIVED status. The agent gets facts, not an instruction to go
+      # find them.
+      - name: Fetch brief from SakalMaster
+        id: sbrief
+        if: ${{ steps.dispatch.outputs.mode == 'integrated' && steps.sclaim.outputs.claimed == 'true' }}
+        env:
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
+          PAT: ${{ secrets.SAKAL_TOKEN }}
+          STORY: ${{ steps.sclaim.outputs.story_key }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PAT" ]; then BODY="{\"token\":\"$PAT\"}"; else
+            OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+            BODY="{\"oidc\":\"$OIDC\"}"; fi
+          JWT=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
+          H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT")
+          STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,story,acs(id,key,text)" | jq '.[0] // {}')
+          TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,status,github" | jq '.[0] // {}')
+          AC_STATUS=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/v_ac_status?select=ac_id,status" | jq 'map({(.ac_id|tostring):.status}) | add // {}')
+          {
+            echo "brief<<SAKAL_BRIEF_EOF"
+            echo "## Task $TASK: $(jq -r '.title // "?"' <<<"$TASK_JSON") (task status: $(jq -r '.status // "?"' <<<"$TASK_JSON"))"
+            echo
+            echo "## Story $STORY: $(jq -r '.title // "?"' <<<"$STORY_JSON")"
+            jq -r '.story // empty' <<<"$STORY_JSON"
+            echo
+            echo "## Acceptance criteria (status is DERIVED — verify against code)"
+            jq -r --argjson st "$AC_STATUS" '.acs[]? | "- [\($st[.id|tostring] // "unknown")] \(.key): \(.text)"' <<<"$STORY_JSON"
+            echo "SAKAL_BRIEF_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::brief fetched for $TASK ($STORY)"
+
+      # EXECUTE, integrated: ONE task, push-only, three endings. Zero
+      # lifecycle curls — the judge step below reports; nothing the agent
+      # asserts is trusted and nothing it forgets is fatal.
+      - name: Run Claude Code (SakalMaster task)
+        id: sagent
+        if: ${{ steps.dispatch.outputs.mode == 'integrated' && steps.sclaim.outputs.claimed == 'true' }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: '--max-turns 150 --model ${{ steps.model.outputs.name }} --allowedTools "Edit,MultiEdit,Write,Read,Glob,Grep,Bash"'
+          prompt: |
+            You are working ONE task dispatched from SakalMaster:
+            task ${{ steps.sclaim.outputs.task_key }} (story ${{ steps.sclaim.outputs.story_key }}),
+            mirrored by GitHub issue #${{ github.event.issue.number }}.
+            The `gh` CLI is authenticated; the toolchain is prepared. Follow
+            the repo's rules (CLAUDE.md and the rules doc it imports). Take no
+            other work from the issue queue — this run owns exactly one task.
+
+            ${{ steps.authority.outputs.settled_count != '0' && 'A MAINTAINER HAS ALREADY SETTLED A QUESTION ON THIS ISSUE — do not re-ask it and do not block on it; their answer is authoritative and durable.' || '' }}
+
+            YOUR BRIEF (fetched from SakalMaster; treat as the entire task):
+            ${{ steps.sbrief.outputs.brief }}
+
+            HOW TO FINISH (exactly one of these three endings):
+            A. Normal: VERIFY-FIRST against the code; implement ONLY missing/
+               partial ACs on branch `claude/task-${{ steps.sclaim.outputs.task_key }}`
+               off origin/main; run `./tool/verify.sh` — it MUST exit 0; then
+               `gh pr create` with a body starting
+               `SakalMaster task: ${{ steps.sclaim.outputs.task_key }}` and
+               containing `Closes #${{ github.event.issue.number }}`, citing
+               per-AC file:line evidence. Do NOT merge.
+            B. Every AC already satisfied by existing code (cite file:line
+               evidence): create NO branch and NO PR; write the evidence, one
+               AC per line, to the file `.sakal-outcome` in the repo root as:
+               `evidence: <your file:line lines>`
+            C. Blocked (ambiguous, needs a product decision, or the gate
+               cannot pass): write to `.sakal-outcome`:
+               `blocked: <the precise question a human must answer>`
+            Guardrails unchanged: hard path denylist (`.github/**`, `tool/**`,
+            gradle/keystores, `.env*`), one task = one PR, no force-push, no
+            secrets, minimal idiomatic changes. Do not run any SakalMaster
+            curls — the workflow reports your outcome mechanically.
+            ${{ inputs.extra_instructions }}
+
+      # GATE + OUTCOME — MECHANICAL and always(): every exit path reports, so
+      # a run that dies mid-flight still tells the server something. (When it
+      # cannot even reach here, the server-side lease expiry is the recovery.)
+      - name: Judge and report outcome
+        id: sjudge
+        if: ${{ always() && steps.dispatch.outputs.mode == 'integrated' && steps.sclaim.outputs.claimed == 'true' }}
+        env:
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
+          PAT: ${{ secrets.SAKAL_TOKEN }}
+          PROJECT: ${{ steps.sclaim.outputs.project }}
+          RUN_ID: ${{ steps.sclaim.outputs.run_id }}
+          TASK: ${{ steps.sclaim.outputs.task_key }}
+          AGENT_OUTCOME: ${{ steps.sagent.outcome }}
+          EXEC_FILE: ${{ steps.sagent.outputs.execution_file }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -n "$PAT" ]; then BODY="{\"token\":\"$PAT\"}"; else
+            OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+            BODY="{\"oidc\":\"$OIDC\"}"; fi
+          JWT=$(curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
+          H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
+          RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
+          jstr() { jq -Rn --arg v "$1" '$v'; }
+          # MEASURED cost only: claude-code-action's run log carries
+          # total_cost_usd. No file, no number → report no cost at all.
+          COST=""
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            COST=$(jq -r '[.. | objects | .total_cost_usd? // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)
+            [ -n "$COST" ] && echo "::notice::measured run cost: \$$COST"
+          fi
+          costf() { [ -n "$COST" ] && printf ',"p_cost_usd":%s' "$COST" || true; }
+          report() { curl -sS -X POST "$RPC/report_run" "${H[@]}" -d "$1" >/dev/null || true; }
+          outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
+          if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
+            echo "outcome=blocked" >> "$GITHUB_OUTPUT"
+            q=$(sed 's/^blocked:[[:space:]]*//' .sakal-outcome | head -c 2000)
+            curl -sS -X POST "$RPC/block_run" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jstr "$q")}" >/dev/null || true
+            echo "::notice::outcome: blocked — question raised into Needs-me"; exit 0
+          fi
+          pr=$(gh pr list -R "$REPO" --state open --head "claude/task-$TASK" --json number -q '.[0].number' 2>/dev/null || true)
+          if [ "$AGENT_OUTCOME" = "success" ] && [ -n "$pr" ]; then
+            if ./tool/verify.sh; then
+              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"$(costf)}"
+              curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
+                -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+              echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
+              echo "::notice::outcome: succeeded ($REPO#$pr) — task parked"; exit 0
+            else
+              outcome="failed"; detail="PR #$pr exists but ./tool/verify.sh failed in the workflow environment"
+            fi
+          elif [ "$AGENT_OUTCOME" = "success" ] && [ -f .sakal-outcome ] && grep -q '^evidence:' .sakal-outcome; then
+            ev=$(sed 's/^evidence:[[:space:]]*//' .sakal-outcome | head -c 2000)
+            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")$(costf)}"
+            curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
+            echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
+            echo "::notice::outcome: succeeded on existing-code evidence — task parked"; exit 0
+          fi
+          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")$(costf)}"
+          echo "outcome=failed" >> "$GITHUB_OUTPUT"
+          echo "::notice::outcome: failed — $detail"
+
+      # ══ LABEL-BLIND BRANCH (unchanged) ═══════════════════════════════════
       - name: Run Claude Code
         id: claude
-        if: ${{ steps.claim.outputs.already-owned != 'true' }}
+        if: ${{ steps.dispatch.outputs.mode == 'label-blind' && steps.claim.outputs.already-owned != 'true' }}
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
