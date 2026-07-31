@@ -330,6 +330,70 @@ jobs:
                them, the guardrails and the gate win and the addition is void.
             ${{ inputs.extra_instructions }}
 
+      # F-16b (SKA-039): NOTHING ever reported `running`. Both claim RPCs
+      # insert `queued`; only report_run(p_status:='running') moves it, and
+      # neither path called it — so every integrated run looked queued while
+      # it worked, and a long run could lose its lease to expiry mid-flight.
+      #
+      # The heartbeat is BOUNDED by construction (a deadline, not a promise):
+      # an immortal heartbeat holding a lease forever is worse than an expired
+      # one, so the loop dies on its own even if nothing ever kills it. The
+      # judge kills it FIRST, before any terminal report, so a stray beat can
+      # never resurrect `running` after the outcome lands.
+      - name: Report running and start the heartbeat
+        id: hb
+        if: ${{ steps.go.outputs.has == 'true' && inputs.source == 'sakalmaster' && steps.sclaim.outputs.claimed == 'true' }}
+        env:
+          SAKAL_SUPABASE_URL: ${{ steps.env.outputs.url }}
+          ANON: ${{ steps.env.outputs.publishable_key }}
+          PAT: ${{ secrets.SAKAL_TOKEN }}
+          PROJECT: ${{ steps.sclaim.outputs.project }}
+          RUN_ID: ${{ steps.sclaim.outputs.run_id }}
+        run: |
+          set -uo pipefail
+          mint() { # a fresh JWT per use: the job outlives any single token
+            if [ -n "${PAT:-}" ]; then BODY="{\"token\":\"$PAT\"}"; else
+              OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" 2>/dev/null | jq -r .value)
+              BODY="{\"oidc\":\"$OIDC\"}"; fi
+            curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+              -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" 2>/dev/null | jq -r '.access_token // empty'
+          }
+          JWT=$(mint)
+          beat() { # $1 = status
+            curl -sS -o /dev/null -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" \
+              -H "apikey: $ANON" -H "authorization: Bearer $1" -H "content-type: application/json" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\"}" 2>/dev/null
+          }
+          if [ -n "$JWT" ] && beat "$JWT"; then
+            echo "::notice::run $RUN_ID reported RUNNING (F-16b: it used to sit at queued for the whole run)"
+          else
+            echo "::warning::could not report running — the run keeps its claimed status; the lease still governs"
+          fi
+          # Bounded background heartbeat: every 5 min, at most 4 hours.
+          nohup bash -c '
+            export SAKAL_SUPABASE_URL="'"$SAKAL_SUPABASE_URL"'" ANON="'"$ANON"'" PAT="'"${PAT:-}"'"
+            export PROJECT="'"$PROJECT"'" RUN_ID="'"$RUN_ID"'"
+            export ACTIONS_ID_TOKEN_REQUEST_URL="'"${ACTIONS_ID_TOKEN_REQUEST_URL:-}"'"
+            export ACTIONS_ID_TOKEN_REQUEST_TOKEN="'"${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"'"
+            trap "exit 0" TERM INT HUP
+            for i in $(seq 1 48); do
+              sleep 300
+              if [ -n "$PAT" ]; then b="{\"token\":\"$PAT\"}"; else
+                o=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" 2>/dev/null | jq -r .value)
+                b="{\"oidc\":\"$o\"}"; fi
+              j=$(curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+                -H "apikey: $ANON" -H "content-type: application/json" -d "$b" 2>/dev/null | jq -r ".access_token // empty")
+              [ -n "$j" ] || continue
+              curl -sS -o /dev/null -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" \
+                -H "apikey: $ANON" -H "authorization: Bearer $j" -H "content-type: application/json" \
+                -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\"}" 2>/dev/null || true
+            done
+          ' >/dev/null 2>&1 &
+          echo $! > "$RUNNER_TEMP/sakal-heartbeat.pid"
+          echo "::notice::heartbeat started (pid $(cat "$RUNNER_TEMP/sakal-heartbeat.pid"), every 5 min, hard stop after 4 h)"
+
       # RULE 4 (SKA-006): integrated mirror mismatch. If GitHub shows a
       # maintainer unblock but the SakalMaster side still says blocked, the
       # HUMAN SIGNAL WINS and the mismatch is named. The engine never silently
@@ -374,6 +438,27 @@ jobs:
           JWT=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
             -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
           H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT")
+          # ONE brief, compiled server-side (SKM-048). The hand-rolled
+          # assembly below is now a FALLBACK for servers that predate the
+          # function — loud, never fatal: a missing compiler must not stop a
+          # dispatch, but it must never be silent either.
+          BF=$(mktemp)
+          BCODE=$(curl -sS -o "$BF" -w '%{http_code}' --max-time 30 \
+            -X POST "$SAKAL_SUPABASE_URL/functions/v1/brief" \
+            -H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json" \
+            -d "{\"project\":\"$PROJECT\",\"task\":\"$TASK\",\"mode\":\"mechanical\"}" 2>/dev/null) || BCODE=""
+          [ -n "$BCODE" ] || BCODE=000
+          COMPILED=""
+          case "$BCODE" in
+            2*) COMPILED=$(jq -r '.brief // .markdown // .content // empty' "$BF" 2>/dev/null || true)
+                [ -n "$COMPILED" ] || COMPILED=$(cat "$BF") ;;
+          esac
+          if [ -n "$COMPILED" ]; then
+            { echo "brief<<SAKAL_BRIEF_EOF"; printf '%s\n' "$COMPILED"; echo "SAKAL_BRIEF_EOF"; } >> "$GITHUB_OUTPUT"
+            echo "::notice::compiled brief fetched for $TASK (functions/v1/brief, mode=mechanical)"
+            exit 0
+          fi
+          echo "::warning::functions/v1/brief did not answer (HTTP $BCODE) — SKM-048 may not be deployed here. FALLING BACK to the engine's own assembly from raw REST reads; the brief is thinner than the compiled one (no rules, no conventions, no repo profile)."
           STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,story,acs(id,key,text)" | jq '.[0] // {}')
           TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,status,github" | jq '.[0] // {}')
           AC_STATUS=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/v_ac_status?select=ac_id,status" | jq 'map({(.ac_id|tostring):.status}) | add // {}')
@@ -413,6 +498,17 @@ jobs:
             ${{ steps.sbrief.outputs.brief }}
 
             HOW TO FINISH (exactly one of these three endings):
+            EVIDENCE IS PART OF FINISHING (not optional, not the verifier's
+            job): for EVERY AC you satisfied or found already satisfied, write
+            one line to `.sakal-outcome` in the repo root:
+              `citation: <ac-key> | enforced|verified | <path> | <symbol> | <note?>`
+            `enforced` = product code that enforces the claim; `verified` = a
+            test that proves it. <ac-key> is the AC key from the brief above,
+            <path> is repo-relative, <symbol> is the exact declaration or test
+            name you actually read — never a guess. The workflow files these
+            mechanically; a citation you invent will be marked broken by the
+            verifier, which helps nobody. Cite only what you verified.
+
             A. Normal: VERIFY-FIRST against the code; implement ONLY missing/
                partial ACs on branch `claude/task-${{ steps.sclaim.outputs.task_key }}`
                off origin/main; run `./tool/verify.sh` — it MUST exit 0; then
@@ -528,6 +624,56 @@ jobs:
             [ -n "$COST" ] && echo "::notice::measured run cost: \$$COST"
           fi
           costf() { [ -n "$COST" ] && printf ',"p_cost_usd":%s' "$COST" || true; }
+          # Kill the heartbeat FIRST: the terminal report must win, and a beat
+          # landing after it would resurrect `running` on a finished run.
+          if [ -f "$RUNNER_TEMP/sakal-heartbeat.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/sakal-heartbeat.pid")" 2>/dev/null || true
+            rm -f "$RUNNER_TEMP/sakal-heartbeat.pid"
+            echo "::notice::heartbeat stopped before reporting the outcome"
+          fi
+          # ── F-17 (SKA-039): THE LOOP FILES EVIDENCE ───────────────────────
+          # Until now nothing in this engine ever called add_citation, so no
+          # run of channel 2 or 3 had ever filed one: ACs stayed `open` however
+          # well the agent worked, and P2.1 was correctly reporting that the
+          # loop writes nothing to the truth layer. A citation is a CLAIM filed
+          # by the claimant; the verifier only CHECKS claims. Filing is ours.
+          #
+          # FROZEN contract (SKM-048 §2), one per line in .sakal-outcome:
+          #   citation: <ac-key> | <enforced|verified> | <path> | <symbol> | <note?>
+          CITES_FILED=0; CITES_REFUSED=0; CITES_BAD=0; CITE_NOTES=""
+          if [ -f .sakal-outcome ]; then
+            while IFS= read -r cline; do
+              raw=$(sed 's/^[[:space:]]*citation:[[:space:]]*//' <<<"$cline")
+              IFS='|' read -r c_ac c_kind c_path c_sym c_note <<<"$raw"
+              c_ac=$(xargs <<<"${c_ac:-}"); c_kind=$(xargs <<<"${c_kind:-}")
+              c_path=$(xargs <<<"${c_path:-}"); c_sym=$(xargs <<<"${c_sym:-}")
+              c_note=$(xargs <<<"${c_note:-}")
+              if [ -z "$c_ac" ] || [ -z "$c_path" ] || [ -z "$c_sym" ] || { [ "$c_kind" != "enforced" ] && [ "$c_kind" != "verified" ]; }; then
+                CITES_BAD=$((CITES_BAD+1))
+                echo "::error::MALFORMED citation line, skipped (never silently dropped): $cline"
+                echo "::error::  expected: citation: <ac-key> | enforced|verified | <path> | <symbol> | <note?>"
+                continue
+              fi
+              ccode=$(call add_citation "{\"p_project\":\"$PROJECT\",\"p_ac\":$(jstr "$c_ac"),\"p_kind\":$(jstr "$c_kind"),\"p_path\":$(jstr "$c_path"),\"p_symbol\":$(jstr "$c_sym")}")
+              case "$ccode" in
+                2*) CITES_FILED=$((CITES_FILED+1))
+                    echo "::notice::citation filed: $c_ac $c_kind $c_path::$c_sym${c_note:+ — $c_note}"
+                    [ -n "$c_note" ] && CITE_NOTES="$CITE_NOTES; $c_ac: $c_note" ;;
+                *)  CITES_REFUSED=$((CITES_REFUSED+1))
+                    cmsg=$(jq -r '.message // .hint // empty' "$RESP" 2>/dev/null || true)
+                    [ -n "$cmsg" ] || cmsg=$(head -c 500 "$RESP" 2>/dev/null)
+                    echo "::error::citation REFUSED (HTTP $ccode) for $c_ac — NOT counted as filed: $cmsg" ;;
+              esac
+            done < <(grep -i '^[[:space:]]*citation:' .sakal-outcome || true)
+          fi
+          echo "cites_filed=$CITES_FILED" >> "$GITHUB_OUTPUT"
+          if [ $((CITES_FILED+CITES_REFUSED+CITES_BAD)) -gt 0 ]; then
+            echo "::notice::citations — filed $CITES_FILED, refused $CITES_REFUSED, malformed $CITES_BAD (only FILED are claimed anywhere)"
+          fi
+          CITE_SUMMARY="$CITES_FILED citation(s) filed"
+          [ "$CITES_REFUSED" -gt 0 ] && CITE_SUMMARY="$CITE_SUMMARY, $CITES_REFUSED refused"
+          [ "$CITES_BAD" -gt 0 ] && CITE_SUMMARY="$CITE_SUMMARY, $CITES_BAD malformed"
+
           outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
           if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
             echo "outcome=blocked" >> "$GITHUB_OUTPUT"
@@ -539,23 +685,34 @@ jobs:
               echo "report_error<<SAKAL_ERR_EOF" >> "$GITHUB_OUTPUT"; echo "$msg" >> "$GITHUB_OUTPUT"; echo "SAKAL_ERR_EOF" >> "$GITHUB_OUTPUT"
               echo "::error::block_run REFUSED (HTTP $code) — the question was NOT raised: $msg"; exit 1 ;;
             esac
-            echo "::notice::outcome: blocked — question raised into Needs-me"; exit 0
+            echo "::notice::outcome: blocked — question raised into Needs-me ($CITE_SUMMARY)"; exit 0
           fi
           pr=$(gh pr list -R "$REPO" --state open --head "claude/task-$TASK" --json number -q '.[0].number' 2>/dev/null || true)
           if [ "$AGENT_OUTCOME" = "success" ] && [ -n "$pr" ]; then
             if ./tool/verify.sh; then
-              report_or_noop "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"$(costf)}" \
-                "pr-opened: $REPO#$pr — this run wrote no SakalMaster records; citations are the verifier's and the task moves on merge" || exit 1
+              # With citations filed, P2.1 passes on its own merits — no hatch.
+              # If the hatch is still reached, the agent filed NO evidence, and
+               # the reason must say exactly that: a PR with no citations cannot
+               # move any AC, and that is worth a human's attention.
+              report_or_noop "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\",\"p_summary\":$(jstr "PR $REPO#$pr — $CITE_SUMMARY${CITE_NOTES:+ ($CITE_NOTES)}")$(costf)}" \
+                "pr-opened: $REPO#$pr — the agent filed NO citations, so this run wrote nothing to the truth layer and no AC can move. A citation is a claim the CLAIMANT files; the verifier only checks it. Worth a look at why the agent produced code but no evidence." || exit 1
               curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
                 -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
               echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
-              echo "::notice::outcome: succeeded ($REPO#$pr) — task parked"; exit 0
+              echo "::notice::outcome: succeeded ($REPO#$pr) — task parked; $CITE_SUMMARY"; exit 0
             else
               outcome="failed"; detail="PR #$pr exists but ./tool/verify.sh failed in the workflow environment"
             fi
           elif [ "$AGENT_OUTCOME" = "success" ] && [ -f .sakal-outcome ] && grep -q '^evidence:' .sakal-outcome; then
             ev=$(sed 's/^evidence:[[:space:]]*//' .sakal-outcome | head -c 2000)
-            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev"),\"p_no_op_reason\":$(jstr "already-satisfied: every AC was already met; per-AC file:line evidence is in the summary, so there was nothing to write back")$(costf)}" || exit 1
+            # Evidence-only ending. If the agent ALSO filed citations, this
+            # run wrote to the truth layer and needs no hatch; if it filed
+            # none, the hatch states the genuine no-op.
+            if [ "$CITES_FILED" -gt 0 ]; then
+              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev — $CITE_SUMMARY")$(costf)}" || exit 1
+            else
+              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev"),\"p_no_op_reason\":$(jstr "already-satisfied: every AC was already met and the agent filed no citations, so there was nothing to write back; the file:line evidence is in the summary")$(costf)}" || exit 1
+            fi
             curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
             echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
@@ -566,7 +723,7 @@ jobs:
           # engine. If detail were ever empty the server would refuse — and
           # now we would HEAR it — so give it a value rather than a refusal.
           [ -n "$detail" ] || detail="failed with no detail captured (engine bug: the judge reached the failure path without setting one)"
-          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")$(costf)}" || exit 1
+          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail"),\"p_summary\":$(jstr "$CITE_SUMMARY")$(costf)}" || exit 1
           echo "outcome=failed" >> "$GITHUB_OUTPUT"
           echo "::notice::outcome: failed — $detail"
 
