@@ -463,6 +463,62 @@ jobs:
           H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json")
           RPC="$SAKAL_SUPABASE_URL/rest/v1/rpc"
           jstr() { jq -Rn --arg v "$1" '$v'; }
+          # ── F-16 (SKA-038): THE JUDGE MUST HEAR ────────────────────────────
+          # The old reporter was `curl -sS … >/dev/null || true`: no -f, body
+          # discarded, exit swallowed. When the server raised P2.1's teaching
+          # refusal ("this run reports succeeded but wrote nothing back…"),
+          # the step went green and annotated "task parked" while the run row
+          # stayed queued and the lease stayed held. A reporter that cannot
+          # hear the receipt is the engine's own version of F-9: it recorded
+          # its INTENTION to report, not the transmission.
+          RESP=$(mktemp); REPORT_ERROR=""
+          call() { # $1 rpc, $2 payload → prints the HTTP code, body in $RESP
+            local code
+            # Truncate first: a network failure leaves curl no body to write,
+            # and a stale one would be quoted as though the server had just
+            # said it. The refusal text IS the diagnosis — it must be THIS
+            # call's text or none.
+            : > "$RESP"
+            code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 30 \
+              -X POST "$RPC/$1" "${H[@]}" -d "$2" 2>/dev/null) || code=""
+            [ -n "$code" ] || code=000
+            # ONE retry, and only for transient conditions (5xx / no answer).
+            # Never a 4xx: a refusal re-sent unchanged is spam, not a retry.
+            case "$code" in
+              5*|000) sleep 3; : > "$RESP"
+                code=$(curl -sS -o "$RESP" -w '%{http_code}' --max-time 30 \
+                  -X POST "$RPC/$1" "${H[@]}" -d "$2" 2>/dev/null) || code=""
+                [ -n "$code" ] || code=000 ;;
+            esac
+            printf '%s' "$code"
+          }
+          # Hearing means STATUS-CODE truth — never a body-shape dependency.
+          # The body is read only to quote the refusal, and falls back to raw.
+          report() { # $1 payload → 0 accepted, 1 refused (step must fail)
+            local code msg
+            code=$(call report_run "$1")
+            case "$code" in 2*) return 0 ;; esac
+            msg=$(jq -r '.message // .hint // .details // empty' "$RESP" 2>/dev/null || true)
+            [ -n "$msg" ] || msg=$(head -c 2000 "$RESP" 2>/dev/null)
+            [ -n "$msg" ] || msg="no response body (HTTP $code) — the server was not reached or said nothing"
+            REPORT_ERROR="$msg"
+            { echo "report_error<<SAKAL_ERR_EOF"; echo "$msg"; echo "SAKAL_ERR_EOF"; } >> "$GITHUB_OUTPUT"
+            echo "::error::report_run REFUSED (HTTP $code) — THIS RUN IS NOT RECORDED. The server said: $msg"
+            return 1
+          }
+          # P2.1's own escape hatch, used only when the server says the run
+          # wrote nothing. Retrying WITH p_no_op_reason is a different
+          # request, not a re-send — and it is never sent pre-emptively, so
+          # no_op_reason can never become a rubber stamp on a run that did write.
+          report_or_noop() { # $1 payload, $2 honest reason
+            report "$1" && return 0
+            case "$REPORT_ERROR" in
+              *"wrote nothing back"*)
+                echo "::warning::P2.1: nothing was attributed to this run server-side — re-reporting ONCE with p_no_op_reason: $2"
+                report "$(jq -c --arg r "$2" '. + {p_no_op_reason:$r}' <<<"$1")" ;;
+              *) return 1 ;;
+            esac
+          }
           # MEASURED cost (session 12 STEP 2): claude-code-action writes its run
           # log to execution_file, whose result entry carries total_cost_usd.
           # No file, no number → report no cost at all. Never invent one.
@@ -472,19 +528,24 @@ jobs:
             [ -n "$COST" ] && echo "::notice::measured run cost: \$$COST"
           fi
           costf() { [ -n "$COST" ] && printf ',"p_cost_usd":%s' "$COST" || true; }
-          report() { curl -sS -X POST "$RPC/report_run" "${H[@]}" -d "$1" >/dev/null || true; }
           outcome="failed"; detail="agent step outcome=$AGENT_OUTCOME with no PR and no .sakal-outcome"
           if [ -f .sakal-outcome ] && grep -q '^blocked:' .sakal-outcome; then
             echo "outcome=blocked" >> "$GITHUB_OUTPUT"
             q=$(sed 's/^blocked:[[:space:]]*//' .sakal-outcome | head -c 2000)
-            curl -sS -X POST "$RPC/block_run" "${H[@]}" \
-              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jstr "$q")}" >/dev/null || true
+            code=$(call block_run "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_reason\":$(jstr "$q")}")
+            case "$code" in 2*) : ;; *)
+              msg=$(jq -r '.message // .hint // empty' "$RESP" 2>/dev/null || true)
+              [ -n "$msg" ] || msg=$(head -c 2000 "$RESP" 2>/dev/null)
+              echo "report_error<<SAKAL_ERR_EOF" >> "$GITHUB_OUTPUT"; echo "$msg" >> "$GITHUB_OUTPUT"; echo "SAKAL_ERR_EOF" >> "$GITHUB_OUTPUT"
+              echo "::error::block_run REFUSED (HTTP $code) — the question was NOT raised: $msg"; exit 1 ;;
+            esac
             echo "::notice::outcome: blocked — question raised into Needs-me"; exit 0
           fi
           pr=$(gh pr list -R "$REPO" --state open --head "claude/task-$TASK" --json number -q '.[0].number' 2>/dev/null || true)
           if [ "$AGENT_OUTCOME" = "success" ] && [ -n "$pr" ]; then
             if ./tool/verify.sh; then
-              report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"$(costf)}"
+              report_or_noop "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_pr_ref\":\"$REPO#$pr\"$(costf)}" \
+                "pr-opened: $REPO#$pr — this run wrote no SakalMaster records; citations are the verifier's and the task moves on merge" || exit 1
               curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
                 -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
               echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
@@ -494,13 +555,18 @@ jobs:
             fi
           elif [ "$AGENT_OUTCOME" = "success" ] && [ -f .sakal-outcome ] && grep -q '^evidence:' .sakal-outcome; then
             ev=$(sed 's/^evidence:[[:space:]]*//' .sakal-outcome | head -c 2000)
-            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev")$(costf)}"
+            report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"succeeded\",\"p_summary\":$(jstr "already satisfied — $ev"),\"p_no_op_reason\":$(jstr "already-satisfied: every AC was already met; per-AC file:line evidence is in the summary, so there was nothing to write back")$(costf)}" || exit 1
             curl -sS -X POST "$RPC/set_task_agent_ready" "${H[@]}" \
               -d "{\"p_project\":\"$PROJECT\",\"p_task\":\"$TASK\",\"p_ready\":false}" >/dev/null || true
             echo "outcome=succeeded" >> "$GITHUB_OUTPUT"
             echo "::notice::outcome: succeeded on existing-code evidence — task parked"; exit 0
           fi
-          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")$(costf)}"
+          # ASSERTION (P2.1's failed branch): p_error is never empty here, so
+          # "failed with no error and no writes" cannot be reached from this
+          # engine. If detail were ever empty the server would refuse — and
+          # now we would HEAR it — so give it a value rather than a refusal.
+          [ -n "$detail" ] || detail="failed with no detail captured (engine bug: the judge reached the failure path without setting one)"
+          report "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"failed\",\"p_error\":$(jstr "$detail")$(costf)}" || exit 1
           echo "outcome=failed" >> "$GITHUB_OUTPUT"
           echo "::notice::outcome: failed — $detail"
 
