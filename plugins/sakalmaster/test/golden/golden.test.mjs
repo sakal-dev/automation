@@ -361,6 +361,55 @@ console.log('\n── submit-plan writes summary + degradation contract')
   eq(p4.blocked.length, 0, 'F-4: unread epics/journeys/personas/modules block nothing — an unread set is not an empty server')
   eq(p4.orphans.appShells.join(','), 'org/legacy-shell', 'F-5c: repo-name app shells surface in the orphan report')
 
+  // ── SKA-036 / F-10: absent REQUIRED fields block, named ──
+  // An absent field is falsy — it fails no lookup, so it used to sail into
+  // "ready" while the create tool's contract refused it.
+  mkd(join(D, 'stories/YY-01'), { recursive: true })
+  wf(join(D, 'stories/YY-01/YY-01-01.md'), '---\nkey: YY-01-01\ntitle: T\nepic: YY-01\npersona: p\napp: a\n---\n\nAs a p, I want x, so that y.\n\n## Acceptance criteria\n\n```yaml\n- ac: YY-01-01-a\n  text: "c"\n  cite: []\n```\n')
+  const f10 = JSON.parse(execFileSync('node', [join(here, '../../lib/sakal-plan.mjs'), '--dir', D, '--server', srvFile('f10.json', { project: 'p', apps: [APP], stories: [] }), '--json'], { encoding: 'utf8' }))
+  eq(f10.blocked.some(b => /YY-01-01 is missing required field\(s\) module/.test(b.why)), true, 'F-10: absent required field blocks, naming the field')
+  eq(f10.ready.some(s => s.key === 'YY-01-01'), false, 'F-10: it never reports READY again')
+  const f10live = JSON.parse(execFileSync('node', [join(here, '../../lib/sakal-plan.mjs'), '--dir', D, '--server', srvFile('f10c.json', { project: 'p', apps: [APP], stories: [], contracts: { story: { required: ['key', 'title', 'app', 'epic', 'persona', 'module', 'journey'] } } }), '--json'], { encoding: 'utf8' }))
+  eq(f10live.blocked.some(b => /module, journey/.test(b.why)), true, 'F-10: a live tool schema in the read-back DRIVES the required set — the table cannot drift silently')
+  rmSync(join(D, 'stories/YY-01'), { recursive: true, force: true })
+
+  // ── SKA-036 / F-9: the receipt records the TRANSMISSION ──
+  // THE regression: ack a story whose cites were deferred → the receipt shows
+  // the family held back → the next pass ADDs them (never "identical").
+  wf(join(D, 'config.yaml'), 'format_version: 1\nscope: app\nproject: p\napp: a\ntarget_host: h\n')
+  wf(storyPath, `---\nkey: XX-01-01\ntitle: T\nepic: XX-01\npersona: p\napp: a\nmodule: m\nsource: o/r:d.md#a@abc1234\n---\n\nAs a p, I want x, so that y.\n\n## Acceptance criteria\n\n\`\`\`yaml\n- ac: XX-01-01-a\n  text: "claim"\n  cite:\n    - kind: enforced\n      path: lib/x.dart\n      symbol: Foo\n      sha: abc1234\n\`\`\`\n`)
+  rmSync(join(D, '.baseline.json'))
+  eq(base(['--write', '--ack', 'stories/XX-01-01', '--sent', 'fields', '--sent', 'acs', '--sent', 'acTexts', '--held', 'cites=deferred: F-6', '--ts', '2026-07-31T09:00:00Z']).status, 0, 'F-9: an ack names WHICH families were sent')
+  const r9 = JSON.parse(readFileSync(join(D, '.baseline.json'), 'utf8'))
+  eq(r9._schema, 2, 'receipt schema 2 records transmission')
+  eq(r9.stories['XX-01-01']._sent.cites.held_back, 'deferred: F-6', 'the held-back family is MACHINE-READABLE state in the receipt, not prose in the log')
+  eq(r9.stories['XX-01-01']._sent.fields.acked, true, 'sent families are acked')
+  const f9 = JSON.parse(spawnSync('node', [join(here, '../../lib/sakal-baseline.mjs'), '--dir', D, '--check', '--json'], { encoding: 'utf8' }).stdout)
+  eq(f9.citesToAdd.length === 1 && f9.citesIdentical === 0, true, 'F-9 REGRESSION: held-back cites are to-ADD on the next pass, never "identical"')
+  eq(f9.notDelivered.some(n => /never acked as sent/.test(n)), true, 'the gate says WHY it treats them as absent')
+  // A receipt claiming a family the server denies — the F-9 shape — is caught
+  // by the corrective with a named diff; without a read-back it refuses.
+  eq(base(['--write', '--ack', 'stories/XX-01-01', '--ts', '2026-07-31T09:01:00Z']).status, 0, 'legacy whole-record ack still works (claims everything)')
+  eq(JSON.parse(readFileSync(join(D, '.baseline.json'), 'utf8')).stories['XX-01-01']._sent.cites.acked, true, 'which is exactly the F-9 shape: cites claimed as delivered')
+  const noRead = spawnSync('node', [join(here, '../../lib/sakal-baseline.mjs'), '--dir', D, '--correct', 'cites', '--server', join(tmp, 'nope.json')], { encoding: 'utf8' })
+  eq(noRead.status === 1 && /cannot verify against a server I cannot read/.test(noRead.stdout), true, 'corrective REFUSES without a read-back — a receipt corrected against silence is F-9 with a new date')
+  const denySrv = srvFile('deny.json', { records: { stories: { 'XX-01-01': { cites: [] } } } })
+  const corr = spawnSync('node', [join(here, '../../lib/sakal-baseline.mjs'), '--dir', D, '--correct', 'cites', '--server', denySrv, '--ts', '2026-07-31T09:02:00Z'], { encoding: 'utf8' })
+  eq(corr.status === 0 && /DENIED by the server .*: 1/.test(corr.stdout), true, 'corrective names the denied claim in the diff')
+  const after = JSON.parse(readFileSync(join(D, '.baseline.json'), 'utf8'))
+  eq(!!after.stories['XX-01-01']._sent.cites.held_back, true, 'the corrected receipt no longer claims what the server denies')
+  const post = JSON.parse(spawnSync('node', [join(here, '../../lib/sakal-baseline.mjs'), '--dir', D, '--check', '--json'], { encoding: 'utf8' }).stdout)
+  eq(post.citesToAdd.length, 1, 'after the corrective, the denied cite is to-ADD')
+  // Partial family transmission: 3 of 5 sent is three acked ITEMS.
+  eq(base(['--write', '--ack', 'stories/XX-01-01', '--sent', 'cites:XX-01-01-a|enforced|lib/x.dart|Foo', '--ts', '2026-07-31T09:03:00Z']).status, 0, 'per-ITEM ack within a family')
+  eq(JSON.parse(spawnSync('node', [join(here, '../../lib/sakal-baseline.mjs'), '--dir', D, '--check', '--json'], { encoding: 'utf8' }).stdout).citesToAdd.length, 0, 'the acked item is delivered; the rest would remain to-ADD')
+  // Schema migration: old shape read, new written, one-way, headered.
+  const old = { stories: { 'XX-01-01': { fields: {}, acs: [], acTexts: {}, cites: ['x'] } }, epics: {}, journeys: {} }
+  wf(join(D, '.baseline.json'), JSON.stringify(old))
+  base(['--write', '--ack', 'stories/XX-01-01', '--sent', 'fields', '--ts', '2026-07-31T09:04:00Z'])
+  const mig = JSON.parse(readFileSync(join(D, '.baseline.json'), 'utf8'))
+  eq(mig._schema === 2 && /never DELIVERED|NOT DELIVERED|transmission/i.test(mig._note ?? ''), true, 'pre-F-9 receipts migrate one-way with a header note')
+
   base(['--log', 'refusal: three-way (test)', '--ts', '2026-07-30T12:01:00Z'])
   const log2 = readFileSync(join(D, 'submit-log.md'), 'utf8')
   eq(log2.startsWith(log1), true, 'the log is append-only')

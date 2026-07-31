@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
 // The SAME reader verify uses. A second config parser is how SKA-024 happened.
-import { readScalars, stripInlineComment } from './sakal-shared.mjs'
+import { readScalars, stripInlineComment, requiredFields } from './sakal-shared.mjs'
 const args = process.argv.slice(2)
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d }
 const DIR = opt('--dir', '.sakal'), SCOPE = opt('--scope', null), JSON_OUT = args.includes('--json')
@@ -32,7 +32,15 @@ const stories = []
 for (const p of walk(join(DIR, 'stories'))) {
   const t = readFileSync(p, 'utf8')
   const g = k => { const m = t.match(new RegExp(`^${k}:\\s*(.*)$`, 'm')); return m ? stripInlineComment(m[1]) : undefined }
-  stories.push({ file: relative(DIR, p), key: g('key'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module'), hasSource: /^source:\s*\S/m.test(t) })
+  // F-10: an ABSENT required field is falsy — it fails no lookup and used to
+  // pass silently into "ready" while the create tool refused it. `story` is
+  // the narrative sentence (frontmatter-less: the body between `---` and the
+  // first `## `), which the create contract requires.
+  const body = t.split('\n---\n').slice(1).join('\n---\n')
+  const hIdx = body.indexOf('\n## ')
+  stories.push({ file: relative(DIR, p), key: g('key'), title: g('title'), app: g('app'), epic: g('epic'), journey: g('journey'), persona: g('persona'), module: g('module'),
+    story: (hIdx < 0 ? body : body.slice(0, hIdx)).trim() || undefined,
+    hasSource: /^source:\s*\S/m.test(t) })
 }
 // F-4 (SKA-035): every reference kind now HAS a list tool server-side
 // (list_registry · list_journeys · list_epics). An absent set in the state
@@ -63,7 +71,13 @@ for (const s of stories.filter(s => inS(s.file))) {
   const miss = [['epic', s.epic], ['journey', s.journey], ['persona', s.persona], ['module', s.module]]
     // Only a set the caller actually READ can block a story.
     .filter(([f, v]) => v && supplied(`${f}s`) && !on[f].has(v))
-  if (miss.length) {
+  // F-10: required-field PRESENCE, driven by the create tool's contract (the
+  // live schema when the read-back carries it, else the one shared table) —
+  // never a hand-list that drifts. Absent required field ⇒ blocked, named.
+  const absent = requiredFields('story', server.contracts).filter(f => s[f] == null || s[f] === '')
+  if (absent.length) {
+    blocked.push({ ...s, why: `${s.key} is missing required field(s) ${absent.join(', ')} — the create tool's contract refuses it; fill them in the record (an absent field is falsy, not a failed lookup)` })
+  } else if (miss.length) {
     const [f, v] = miss[0]
     blocked.push({ ...s, why: `${s.key} references ${f} ${v}, which is not in SakalMaster yet — submit ${f === 'epic' ? 'epics.yaml' : f === 'journey' ? 'journeys.yaml' : `registry/${f}s.yaml`} first` })
   } else ready.push(s)

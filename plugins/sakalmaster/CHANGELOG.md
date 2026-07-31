@@ -3,6 +3,36 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands, MCP registration and the tool registry only appear after a restart).
 
+## 0.15.0 — the receipt records the TRANSMISSION (SKA-036 · F-9/F-10)
+
+F-9: `--ack stories/<KEY>` snapshotted the whole TREE record, so families
+that never went over the wire (162 deferred owner cites, 57 garage) were
+receipted as delivered — and the convergent pass, keying tree-vs-receipt,
+would skip the evidence layer forever while the receipt insisted it landed.
+
+- **Receipt schema 2:** `_sent` per record, per field-family. `--sent
+  <family>` claims delivery, `--sent cites:<item>,<item>` claims PER ITEM
+  (3 of 5 sent is three acked items, not a delivered family), `--held
+  <family>=<reason>` records the hold as MACHINE-READABLE state. A family
+  not named in the ack is held back by default. The log keeps the human
+  sentence; the gate reads the receipt.
+- **The gate treats held_back (and unverified, and unrecorded) as ABSENT:**
+  those items are to-ADD; "identical" requires an acked value, full stop.
+- **`--correct <family> --server <read-back>`** — the corrective as a tool,
+  not a hand-edit: re-derives one family against server truth, names every
+  denied claim, downgrades it to to-ADD, leaves other families byte-exact.
+  Without a read-back it REFUSES ("a receipt corrected against silence is
+  the F-9 defect with a new date").
+- **One-way schema migration** with a header note: pre-F-9 receipts carry
+  `unverified` — their transmission was never recorded, so nothing may be
+  claimed for them.
+- **F-10:** the planner now checks required-field PRESENCE against the
+  create tool's CONTRACT (one shared table, overridable by a live schema in
+  the read-back) — an absent field is falsy, fails no lookup, and used to
+  sail into "ready" while the tool refused it. Absent-required now blocks,
+  naming the field. `journey` (optional since ...007) and `story` (nullable
+  by A2·S3) are deliberately not required.
+
 ## 0.14.0 — identity is read or refused, never defaulted (SKA-035 · F-3/F-4/F-5)
 
 The named disease: an identity decision made without a read path,

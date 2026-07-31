@@ -160,9 +160,20 @@ and a re-submit converges after the migration deploys.
 - Old shape `/sakal-onboard submit …` → one line: *"Submitting moved to
   **/sakal-submit**. Try `/sakal-submit <selector>`."* Not an error dump.
 
-11. **Ack every write into the receipt AS IT LANDS** — "Sent N" may only
-   ever equal acked-N:
-   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --write --ack stories/<KEY> [--ack …] [--map <treeId>=<row>]… [--note "held-back: …"]`
+11. **Ack every write into the receipt AS IT LANDS, naming the FAMILIES that
+   actually went over the wire** — "Sent N" may only ever equal acked-N, and
+   the receipt records THE TRANSMISSION, never the tree'"'"'s copy of it (F-9):
+   `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-baseline.mjs --write --ack stories/<KEY> --sent fields --sent acs --sent acTexts --held cites="deferred: F-6" [--map <treeId>=<row>]… [--note "…"]`
+   - `--sent <family>` claims delivery; `--sent cites:<item>,<item>` claims
+     PER ITEM (3 of 5 sent is three acked items, never a delivered family).
+   - `--held <family>=<reason>` records the hold as machine-readable state —
+     the gate reads the RECEIPT; the log'"'"'s prose is for humans.
+   - **A family you do not name is held back.** The next pass treats it as
+     ABSENT and re-sends it; "identical" requires an acked value, full stop.
+   - Corrupted claim? `--correct <family> --server <read-back>` re-derives
+     that family against server truth and names every denied claim. It
+     REFUSES without a read-back — never correct a receipt against silence.
+     Hand-editing a receipt is not a repair; it is a second source of truth.
    A partial failure leaves exactly the un-acked records out of the receipt
    and the summary must name which landed and which did not. The receipt
    (`.sakal/.baseline.json`) and the log (`.sakal/submit-log.md`,
