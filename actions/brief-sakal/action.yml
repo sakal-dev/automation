@@ -64,12 +64,54 @@ runs:
         # assembly below is now a FALLBACK for servers that predate the
         # function — loud, never fatal: a missing compiler must not stop a
         # dispatch, but it must never be silent either.
-        BF=$(mktemp)
-        BCODE=$(curl -sS -o "$BF" -w '%{http_code}' --max-time 30 \
-          -X POST "$SAKAL_SUPABASE_URL/functions/v1/brief" \
-          -H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json" \
-          -d "{\"project\":\"$PROJECT\",\"task\":\"$TASK\",\"mode\":\"mechanical\"}" 2>/dev/null) || BCODE=""
-        [ -n "$BCODE" ] || BCODE=000
+        # ── SKA-041: WHY the compiler said nothing ────────────────────────
+        # v2.9.0/v2.10.0 collapsed every failure to `HTTP 000` and threw
+        # curl's stderr away, so the one live run that fell back could not say
+        # whether it timed out, failed DNS, or was refused — and the warning
+        # GUESSED "may not be deployed", which probing later disproved (the
+        # function answers 401 from outside; a missing one 404s). That is the
+        # deaf-judge defect (F-16) in a quieter place: loud about the wrong
+        # thing. The reason is now kept, timed, and named.
+        BF=$(mktemp); BERR=$(mktemp)
+        curl_reason() { # $1 = curl exit status → the failure in words
+          case "$1" in
+            0)  echo "no error" ;;
+            6)  echo "could not resolve the host (DNS)" ;;
+            7)  echo "could not connect (refused/unreachable)" ;;
+            28) echo "TIMED OUT — the function did not answer in ${BRIEF_TIMEOUT}s (a cold edge start plus a full compile can exceed it)" ;;
+            35|60) echo "TLS handshake or certificate failure" ;;
+            52) echo "the server closed the connection with an empty reply" ;;
+            56) echo "the connection broke mid-transfer" ;;
+            *)  echo "curl error $1" ;;
+          esac
+        }
+        brief_try() { # sets BCODE, BEXIT, BSECS, BMSG
+          : > "$BF"; : > "$BERR"
+          local w
+          # curl times ITSELF (%{time_total}) — portable, and it measures the
+          # call rather than the surrounding shell.
+          w=$(curl -sS -o "$BF" -w '%{http_code} %{time_total}' --max-time "$BRIEF_TIMEOUT" \
+            -X POST "$SAKAL_SUPABASE_URL/functions/v1/brief" \
+            -H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json" \
+            -d "{\"project\":\"$PROJECT\",\"task\":\"$TASK\",\"mode\":\"mechanical\"}" 2>"$BERR")
+          BEXIT=$?
+          BCODE=$(awk '{print $1}' <<<"$w"); BSECS=$(awk '{print $2}' <<<"$w")
+          [ -n "$BCODE" ] || BCODE=000
+          [ -n "$BSECS" ] || BSECS=0
+          BMS=$(awk -v s="$BSECS" 'BEGIN{printf "%d", s*1000}')
+          BMSG=$(tr -d '\r' < "$BERR" | tr '\n' ' ' | head -c 300)
+        }
+        BRIEF_TIMEOUT=60
+        brief_try
+        echo "::notice::brief call: HTTP $BCODE in ${BMS}ms (curl exit $BEXIT)"
+        # ONE retry, and only when the first attempt produced NO HTTP answer.
+        # A 4xx/5xx IS an answer — re-sending it unchanged is spam (SKA-038),
+        # and a slow SUCCESS must never be doubled.
+        if [ "$BCODE" = "000" ]; then
+          echo "::warning::brief attempt 1 got no answer after ${BMS}ms — $(curl_reason "$BEXIT"). Retrying ONCE."
+          brief_try
+          echo "::notice::brief retry: HTTP $BCODE in ${BMS}ms (curl exit $BEXIT)"
+        fi
         COMPILED=""
         case "$BCODE" in
           2*) COMPILED=$(jq -r '.brief // .markdown // .content // empty' "$BF" 2>/dev/null || true)
@@ -77,10 +119,18 @@ runs:
         esac
         if [ -n "$COMPILED" ]; then
           { echo "brief<<SAKAL_BRIEF_EOF"; printf '%s\n' "$COMPILED"; echo "SAKAL_BRIEF_EOF"; } >> "$GITHUB_OUTPUT"
-          echo "::notice::compiled brief fetched for $TASK (functions/v1/brief, mode=mechanical)"
+          echo "::notice::compiled brief fetched for $TASK (functions/v1/brief, mode=mechanical) in ${BMS}ms"
           exit 0
         fi
-        echo "::warning::functions/v1/brief did not answer (HTTP $BCODE) — SKM-048 may not be deployed here. FALLING BACK to the engine's own assembly from raw REST reads; the brief is thinner than the compiled one (no rules, no conventions, no repo profile)."
+        # Say what is TRUE, not what is guessed.
+        if [ "$BCODE" = "000" ]; then
+          echo "::warning::the brief compiler did not answer after two attempts (${BMS}ms on the last) — $(curl_reason "$BEXIT"). The function IS deployed (it answers 401 to an unauthenticated probe; a missing one 404s), so this is a REACHABILITY or LATENCY problem, not a missing deployment."
+        else
+          BBODY=$(jq -r '.message // .error // empty' "$BF" 2>/dev/null || true)
+          [ -n "$BBODY" ] || BBODY=$(head -c 300 "$BF")
+          echo "::warning::the brief compiler ANSWERED and refused: HTTP $BCODE in ${BMS}ms — ${BBODY:-(empty body)}. That is a real answer, not a connection failure; 401/403 here means this runner's JWT is not accepted by the function, which is a different bug from a timeout."
+        fi
+        echo "::warning::FALLING BACK to the engine's own assembly from raw REST reads; the brief is thinner than the compiled one (no rules, no conventions, no repo profile)."
         STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,story,acs(id,key,text)" | jq '.[0] // {}')
         TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,status,github" | jq '.[0] // {}')
         AC_STATUS=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/v_ac_status?select=ac_id,status" | jq 'map({(.ac_id|tostring):.status}) | add // {}')
