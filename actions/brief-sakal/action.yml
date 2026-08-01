@@ -1,0 +1,98 @@
+# =============================================================================
+# brief-sakal — the task brief, compiled server-side (with a loud fallback)
+#
+# MOVED, not rewritten (SKA-040). The engine carried two byte-identical copies
+# of this logic in sweep.yml and on-demand.yml; three consecutive cuts
+# (v2.8.0 copied it, v2.8.2 changed both, v2.9.0 changed both again) each paid
+# double. The script below is the shipped v2.9.0 text, carved out and
+# parameterised — behaviour identical by construction; the only deliberate
+# additions are SKA-040 PART 2's two provenance fields.
+# =============================================================================
+name: brief-sakal
+description: "Fetch the compiled brief (functions/v1/brief, mode=mechanical); fall back LOUDLY to raw REST assembly when the compiler is absent"
+
+inputs:
+  sakal_supabase_url:
+    description: Resolved SakalMaster Supabase URL (from actions/resolve-env)
+    required: true
+  sakal_supabase_publishable_key:
+    description: Resolved publishable key (public by design)
+    required: true
+  token:
+    description: "PAT fallback (sakal_pat_...). Empty in Actions - OIDC is the default path."
+    required: false
+    default: ""
+  project:
+    description: Project uuid (from claim-sakal)
+    required: true
+  task:
+    description: Task key
+    required: true
+  story:
+    description: Story key (may be empty)
+    required: false
+    default: ""
+
+outputs:
+  brief:
+    description: The brief text handed to the agent verbatim
+    value: ${{ steps.fetch.outputs.brief }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch brief
+      id: fetch
+      shell: bash
+      env:
+        SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+        ANON: ${{ inputs.sakal_supabase_publishable_key }}
+        PAT: ${{ inputs.token }}
+        PROJECT: ${{ inputs.project }}
+        TASK: ${{ inputs.task }}
+        STORY: ${{ inputs.story }}
+      run: |
+        set -euo pipefail
+        if [ -n "$PAT" ]; then BODY="{\"token\":\"$PAT\"}"; else
+          OIDC=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" | jq -r .value)
+          BODY="{\"oidc\":\"$OIDC\"}"; fi
+        JWT=$(curl -sSf -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+          -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" | jq -r .access_token)
+        H=(-H "apikey: $ANON" -H "authorization: Bearer $JWT")
+        # ONE brief, compiled server-side (SKM-048). The hand-rolled
+        # assembly below is now a FALLBACK for servers that predate the
+        # function — loud, never fatal: a missing compiler must not stop a
+        # dispatch, but it must never be silent either.
+        BF=$(mktemp)
+        BCODE=$(curl -sS -o "$BF" -w '%{http_code}' --max-time 30 \
+          -X POST "$SAKAL_SUPABASE_URL/functions/v1/brief" \
+          -H "apikey: $ANON" -H "authorization: Bearer $JWT" -H "content-type: application/json" \
+          -d "{\"project\":\"$PROJECT\",\"task\":\"$TASK\",\"mode\":\"mechanical\"}" 2>/dev/null) || BCODE=""
+        [ -n "$BCODE" ] || BCODE=000
+        COMPILED=""
+        case "$BCODE" in
+          2*) COMPILED=$(jq -r '.brief // .markdown // .content // empty' "$BF" 2>/dev/null || true)
+              [ -n "$COMPILED" ] || COMPILED=$(cat "$BF") ;;
+        esac
+        if [ -n "$COMPILED" ]; then
+          { echo "brief<<SAKAL_BRIEF_EOF"; printf '%s\n' "$COMPILED"; echo "SAKAL_BRIEF_EOF"; } >> "$GITHUB_OUTPUT"
+          echo "::notice::compiled brief fetched for $TASK (functions/v1/brief, mode=mechanical)"
+          exit 0
+        fi
+        echo "::warning::functions/v1/brief did not answer (HTTP $BCODE) — SKM-048 may not be deployed here. FALLING BACK to the engine's own assembly from raw REST reads; the brief is thinner than the compiled one (no rules, no conventions, no repo profile)."
+        STORY_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/stories?key=eq.$STORY&select=key,title,story,acs(id,key,text)" | jq '.[0] // {}')
+        TASK_JSON=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/tasks?key=eq.$TASK&select=key,title,status,github" | jq '.[0] // {}')
+        AC_STATUS=$(curl -sf "${H[@]}" "$SAKAL_SUPABASE_URL/rest/v1/v_ac_status?select=ac_id,status" | jq 'map({(.ac_id|tostring):.status}) | add // {}')
+        {
+          echo "brief<<SAKAL_BRIEF_EOF"
+          echo "## Task $TASK: $(jq -r '.title // "?"' <<<"$TASK_JSON") (task status: $(jq -r '.status // "?"' <<<"$TASK_JSON"))"
+          echo
+          echo "## Story $STORY: $(jq -r '.title // "?"' <<<"$STORY_JSON")"
+          jq -r '.story // empty' <<<"$STORY_JSON"
+          echo
+          echo "## Acceptance criteria (status is DERIVED — verify against code)"
+          jq -r --argjson st "$AC_STATUS" '.acs[]? | "- [\($st[.id|tostring] // "unknown")] \(.key): \(.text)"' <<<"$STORY_JSON"
+          echo "SAKAL_BRIEF_EOF"
+        } >> "$GITHUB_OUTPUT"
+        echo "::notice::brief fetched for $TASK ($STORY)"

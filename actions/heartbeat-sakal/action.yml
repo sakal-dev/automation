@@ -1,0 +1,86 @@
+# =============================================================================
+# heartbeat-sakal — report `running`, then keep the lease alive (F-16b)
+#
+# MOVED, not rewritten (SKA-040). The engine carried two byte-identical copies
+# of this logic in sweep.yml and on-demand.yml; three consecutive cuts
+# (v2.8.0 copied it, v2.8.2 changed both, v2.9.0 changed both again) each paid
+# double. The script below is the shipped v2.9.0 text, carved out and
+# parameterised — behaviour identical by construction; the only deliberate
+# additions are SKA-040 PART 2's two provenance fields.
+# =============================================================================
+name: heartbeat-sakal
+description: "Report the run RUNNING and start a BOUNDED background heartbeat; judge-sakal kills it before any terminal report"
+
+inputs:
+  sakal_supabase_url:
+    description: Resolved SakalMaster Supabase URL (from actions/resolve-env)
+    required: true
+  sakal_supabase_publishable_key:
+    description: Resolved publishable key (public by design)
+    required: true
+  token:
+    description: "PAT fallback (sakal_pat_...). Empty in Actions - OIDC is the default path."
+    required: false
+    default: ""
+  project:
+    description: Project uuid (from claim-sakal)
+    required: true
+  run_id:
+    description: The agent_runs id owning the lease (from claim-sakal)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Report running and start the heartbeat
+      shell: bash
+      env:
+        SAKAL_SUPABASE_URL: ${{ inputs.sakal_supabase_url }}
+        ANON: ${{ inputs.sakal_supabase_publishable_key }}
+        PAT: ${{ inputs.token }}
+        PROJECT: ${{ inputs.project }}
+        RUN_ID: ${{ inputs.run_id }}
+      run: |
+        set -uo pipefail
+        mint() { # a fresh JWT per use: the job outlives any single token
+          if [ -n "${PAT:-}" ]; then BODY="{\"token\":\"$PAT\"}"; else
+            OIDC=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" 2>/dev/null | jq -r .value)
+            BODY="{\"oidc\":\"$OIDC\"}"; fi
+          curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+            -H "apikey: $ANON" -H "content-type: application/json" -d "$BODY" 2>/dev/null | jq -r '.access_token // empty'
+        }
+        JWT=$(mint)
+        beat() { # $1 = status
+          curl -sS -o /dev/null -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" \
+            -H "apikey: $ANON" -H "authorization: Bearer $1" -H "content-type: application/json" \
+            -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\"}" 2>/dev/null
+        }
+        if [ -n "$JWT" ] && beat "$JWT"; then
+          echo "::notice::run $RUN_ID reported RUNNING (F-16b: it used to sit at queued for the whole run)"
+        else
+          echo "::warning::could not report running — the run keeps its claimed status; the lease still governs"
+        fi
+        # Bounded background heartbeat: every 5 min, at most 4 hours.
+        nohup bash -c '
+          export SAKAL_SUPABASE_URL="'"$SAKAL_SUPABASE_URL"'" ANON="'"$ANON"'" PAT="'"${PAT:-}"'"
+          export PROJECT="'"$PROJECT"'" RUN_ID="'"$RUN_ID"'"
+          export ACTIONS_ID_TOKEN_REQUEST_URL="'"${ACTIONS_ID_TOKEN_REQUEST_URL:-}"'"
+          export ACTIONS_ID_TOKEN_REQUEST_TOKEN="'"${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"'"
+          trap "exit 0" TERM INT HUP
+          for i in $(seq 1 48); do
+            sleep 300
+            if [ -n "$PAT" ]; then b="{\"token\":\"$PAT\"}"; else
+              o=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sakalmaster" 2>/dev/null | jq -r .value)
+              b="{\"oidc\":\"$o\"}"; fi
+            j=$(curl -sS -X POST "$SAKAL_SUPABASE_URL/functions/v1/token-exchange" \
+              -H "apikey: $ANON" -H "content-type: application/json" -d "$b" 2>/dev/null | jq -r ".access_token // empty")
+            [ -n "$j" ] || continue
+            curl -sS -o /dev/null -X POST "$SAKAL_SUPABASE_URL/rest/v1/rpc/report_run" \
+              -H "apikey: $ANON" -H "authorization: Bearer $j" -H "content-type: application/json" \
+              -d "{\"p_project\":\"$PROJECT\",\"p_run\":\"$RUN_ID\",\"p_status\":\"running\"}" 2>/dev/null || true
+          done
+        ' >/dev/null 2>&1 &
+        echo $! > "$RUNNER_TEMP/sakal-heartbeat.pid"
+        echo "::notice::heartbeat started (pid $(cat "$RUNNER_TEMP/sakal-heartbeat.pid"), every 5 min, hard stop after 4 h)"
