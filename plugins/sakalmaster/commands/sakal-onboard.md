@@ -10,7 +10,7 @@ Print exactly this and stop:
 > - **/sakal-onboard-project** — the project layer (registry, journeys, epics),
 >   in the spec-home repo.
 > - **/sakal-onboard-app** — this codebase's stories and ACs, referencing the
->   project layer already on the server.
+>   project layer that lives in the spec-home repo's own `.sakal/` tree.
 >
 > Single-repo project? Run **/sakal-onboard-project** first, then
 > **/sakal-onboard-app** in the same repo.

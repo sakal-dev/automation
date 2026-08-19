@@ -42,9 +42,10 @@ outcome is fine — the warning asks you to look, not to split.
 ## Keys and slugs
 
 - Journey `XX-Jn` · Epic `XX-nn` · Story `XX-nn-mm` · AC `AC-nn` (zero-padded).
-- `XX` is the project prefix, stable forever. Keys are **identity** — SakalMaster
-  converges on them, so renaming a key creates a new record and orphans the old.
-  Change titles freely; change keys almost never.
+- `XX` is the project prefix, stable forever. Keys are **identity** — every
+  cross-reference (story → epic, journey, persona) resolves by key, so
+  renaming one breaks every file that points at it. Change titles freely;
+  change keys almost never.
 - Registry keys (persona, module, goal, app) are lower-kebab: `bay-tech`,
   `pos-core`. They read as words, not codes, because humans pick them from lists.
 
@@ -80,7 +81,7 @@ a task wearing a story's clothes.
 - **Bug** — behaviour deviates from something already promised. It falsifies an
   AC, and it should be attached to that AC.
 - **Task** — work to be done that no AC yet promises, or the implementation of
-  one. Tasks land **not agent-ready**; the operator flips that.
+  one.
 - An issue that is really a question or a discussion is neither. Leave it.
 
 ## Provenance
@@ -115,26 +116,13 @@ A re-extracted tree carries two kinds of text, and two different laws apply:
 
 In an **imported (source-pinned) tree**, a story with no acceptance criteria
 is honest state — the spec has not defined them yet. Verify **warns**, never
-errors: the story submits as a story, is **never agent-ready**, and its brief
-must say "no ACs — define them first". In a **hand-authored tree** (no pin),
-no ACs stays an **error**: there, the absence means nobody wrote the promise.
+errors, and the brief must say "no ACs — define them first". In a
+**hand-authored tree** (no pin), no ACs stays an **error**: there, the
+absence means nobody wrote the promise.
 
-## Key renames and AC renumbers (SKA-033, ruled)
-
-Keys are identity and letters are addresses; the server rows underneath keep
-their uuids, and evidence (citations, bugs, verifier results) attaches to the
-ROW. Therefore:
-
-- **A key rename or story split requires an operator decision record in
-  `decisions.md` BEFORE the re-submit.** Never infer one from an orphan pair
-  ("server has X; tree does not" + a new key) — the orphan report is the
-  tripwire, not the permission.
-- **An AC renumber (count/order/letters changed) is refused at submit** until
-  the operator confirms with `--confirm-ac-changes` — a shifted re-submit
-  would silently re-text rows whose evidence still attests the old claim.
-  Text-only edits under stable ids are scenario A: they flow freely.
-- **Deleting server records and citations is a human act.** Submit reports
-  orphans and flags vanished cites; it never deletes either.
+A key rename or story split is worth a decision record in `decisions.md`
+naming why — every cross-reference resolves by key, so a rename is a break,
+not a rename, for anything that points at the old one.
 
 ## What is NOT in scope for a convention
 

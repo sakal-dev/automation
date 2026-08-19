@@ -1,7 +1,52 @@
 # sakalmaster plugin — changelog
 
 Update note per release. **After any update: restart Claude Code** (plugin
-commands, MCP registration and the tool registry only appear after a restart).
+commands only appear after a restart).
+
+## 0.16.0 — local-only: SakalMaster discontinued, SUBMIT retired (SPOS-267)
+
+Operator ruling, 2026-08-19: SakalMaster (`master.sakal.dev`) is discontinued.
+The git-tracked `.sakal/` trees are the canon now — nothing in this plugin
+links to, submits to, or pins against a server anymore. PREPARE and VERIFY
+were already offline; this release removes the one phase that wasn't, and the
+declaration fields and prose that existed only to serve it.
+
+- **Retired `/sakal-submit` and its four submit-only libs**: `lib/sakal-plan.mjs`
+  (drift/readiness against a server read-back), `lib/sakal-baseline.mjs` (the
+  receipt + mutation gates), `lib/sakal-identity.mjs` (host/app identity
+  resolution against a connected server), `lib/sakal-record.mjs` (epic-prose
+  extraction for `create_epic`/`update_epic`). All four existed solely to feed
+  the retired command; none had another caller. The golden suite's
+  submit-plan/degradation-contract block (testing exactly these libs) is
+  removed with them — the remaining 96 + 58 cases (prepare/verify rendering)
+  are unaffected and green.
+- **`config.yaml` no longer declares `target_host` / `target_project_id`.**
+  `sakal-verify.mjs` no longer requires `target_host`; `project`/`app`/`scope`/
+  `spec_family`/`app_profile` are unchanged — all four are read by local code
+  paths (verify's REQUIRED/SCOPEAPP checks, prepare's family resolution and
+  A4 profile gates) and stay.
+- **`sakal-scope.mjs`'s `--apps` input is now sourced from the spec-home
+  repo's `registry/codebases.yaml`**, not a server read-back — the onboarding
+  commands' step 1 instructions were rewritten to match. Every "MAY read the
+  server back as enrichment" clause in `sakal-onboard-project.md`,
+  `sakal-onboard-app.md`, and `sakal-verify.md` is gone; these commands never
+  had a server dependency to begin with, they just used to talk about one.
+- **README, CONVENTIONS.md, SKILL.md rewritten** for two phases (PREPARE,
+  VERIFY) instead of three — the "committed .sakal/, fixed by editing and
+  re-submitting" story now reads "fixed by editing and re-verifying."
+  CONVENTIONS.md's "Key renames and AC renumbers (SKA-033)" section (the
+  receipt/mutation-gate mechanics) is removed with the libs it documented;
+  the durable rule (keys are identity, rename with a decision record) is kept.
+- **Dead code removed**: `CREATE_CONTRACT`/`requiredFields` in
+  `sakal-shared.mjs`, orphaned by `sakal-plan.mjs`'s removal.
+- **Known gap, left open deliberately**: under `scope: app`, a story's
+  reference to a persona/epic/journey that does not exist in the spec-home
+  repo was previously caught for certain at submit time (against the live
+  server). There is no more submit-time check — verify still cannot resolve
+  a cross-repo reference (the project layer lives in a different checkout),
+  so a bad reference now surfaces only if someone reads the spec-home tree by
+  hand. Not fixed in this release; flagged for whoever picks up the
+  `.sakal/`-as-canon cleanup next.
 
 ## 0.15.0 — the receipt records the TRANSMISSION (SKA-036 · F-9/F-10)
 

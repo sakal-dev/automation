@@ -637,33 +637,6 @@ export function readFencedACs(text) {
   return acs
 }
 
-// ── F-10 (SKA-036): the create-tool CONTRACT, in ONE table ──────────────────
-// The planner counted MISSING references but never ABSENT required fields —
-// a falsy field is not a failed lookup, so five garage stories reported
-// READY while the create tool refused them. The required set lives HERE, one
-// table, and a read-back may override it with the live tool schema
-// (`contracts.story.required`) so it cannot drift silently.
-//
-// Mirrors sakal_create_story / _create_epic / _create_journey. Two fields are
-// deliberately ABSENT from the story set, each by a recorded ruling:
-//   `journey` — optional server-side since ...007 ("omit it when no journey
-//     genuinely covers this story"); a stale MCP dist that still refuses is a
-//     deploy problem, not a contract.
-//   `story`   — the sentence is nullable by design (A2 · S3): a spec family
-//     with no As-a/I-want/So-that triple emits an EMPTY story rather than a
-//     fabricated one, and that record still submits.
-// Anything here is required in the sense the create tool means: SUPPLIED.
-export const CREATE_CONTRACT = {
-  story: ['key', 'title', 'app', 'epic', 'persona', 'module'],
-  epic: ['key', 'title'],
-  journey: ['key', 'title', 'goal', 'persona'],
-}
-/** The required set for `kind`, live schema winning over the shared table. */
-export function requiredFields(kind, serverContracts) {
-  const live = serverContracts?.[kind]?.required
-  return Array.isArray(live) && live.length ? live : (CREATE_CONTRACT[kind] ?? [])
-}
-
 // ── ONE declaration / test-label matcher ────────────────────────────────────
 // The cite-honesty rule made mechanical: `enforced` needs an exact-name
 // DECLARATION in the cited file; `verified` needs the exact innermost

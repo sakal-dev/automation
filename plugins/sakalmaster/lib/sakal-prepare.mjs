@@ -19,9 +19,8 @@
 //                              fenced yaml with VERBATIM text (fidelity wins —
 //                              imports are exempt from the house voice rules)
 //                              and grep-confirmed cite blocks (Q6 shape).
-//   config.yaml app_profile:   app-level declaration data; submit maps it onto
-//                              the SKM-034 apps columns, degrading gracefully
-//                              when the server predates them.
+//   config.yaml app_profile:   app-level declaration data describing this
+//                              repo's own build/verify/lint tooling.
 //
 // CITE HONESTY, mechanical: every cite in --cites (and every cite carried
 // forward from an existing story file) is re-confirmed against the PINNED
@@ -495,10 +494,10 @@ for (const [key, e] of existing)
     const j = v => Array.isArray(v) ? v.join(', ') : (v ?? '')
     const block = [
       '',
-      '# App profile (SKA-025/027): declaration data for the SKM-034 apps columns.',
-      '# denylist derives from the RULES denylist section; conventions_files are',
-      '# @-include-expanded. Submit maps via sakal_update_app, degrading gracefully',
-      '# when the server predates those columns. Lists are comma-separated.',
+      '# App profile (SKA-025/027): local declaration data about this repo\'s own',
+      '# build/verify/lint tooling. denylist derives from the RULES denylist',
+      '# section; conventions_files are @-include-expanded (both checked locally',
+      '# by prepare). Lists are comma-separated.',
       'app_profile:',
       `  setup_cmd: ${profile.setup_cmd ?? ''}`,
       `  verify_cmd: ${profile.verify_cmd ?? ''}`,

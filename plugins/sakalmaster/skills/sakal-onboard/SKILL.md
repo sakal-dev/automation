@@ -1,37 +1,34 @@
 ---
 name: sakal-onboard
-description: Get a project into SakalMaster in three phases over a committed `.sakal/` directory — PREPARE reads the repo and drafts structured files with provenance, VERIFY lints them until green, SUBMIT writes only verified files through the MCP. Re-runs converge; corrections are file edits. Use when the user says "onboard this repo into SakalMaster", "/sakal-onboard", "prepare the sakal directory", "verify my .sakal", "submit to SakalMaster", or after specs change and the tracker needs to catch up.
+description: Build a committed `.sakal/` directory for a project, fully local — PREPARE reads the repo and drafts structured files with provenance, VERIFY lints them until green. Re-runs converge; corrections are file edits. Use when the user says "onboard this repo", "/sakal-onboard", "prepare the sakal directory", "verify my .sakal", or after specs change and the tracker needs to catch up.
 ---
 
 # sakal-onboard
 
-Three phases over one committed directory:
+Two phases over one committed directory, both fully local:
 
 ```
 PREPARE  read the repo → write .sakal/     (nothing leaves the machine)
 VERIFY   lint .sakal/ → file:line problems (nothing leaves the machine)
-SUBMIT   verified files → SakalMaster      (the only phase that writes)
 ```
 
-**Why files and not a conversation.** Once data is live it is expensive to
-correct and awkward to review. `.sakal/` is the draft while mistakes are still
-free: readable, diffable, editable, and checkable by a linter that says
-`file:line`. A chat transcript is none of those things.
+**Why files and not a conversation.** Once data is drafted it should be cheap
+to correct and easy to review. `.sakal/` is readable, diffable, editable, and
+checkable by a linter that says `file:line`. A chat transcript is none of
+those things.
 
 `.sakal/` is **committed to the repo** by design. It is the project's
 spec-as-code seed and the working copy for every future correction — when
-something is wrong in SakalMaster, you fix the file and submit again.
+something in it is wrong, you fix the file and re-verify.
 
-## The three rules
+## The rules
 
 1. **No status anywhere in `.sakal/`.** Files carry inputs. Status is derived
-   server-side from citations and bugs. A `status:` field is a verify **error**,
-   not a warning — a spec's `[x]` is a claim, and importing it would defeat the
-   product on day one.
-2. **No sync-state file, and prepare/verify never touch the server.** Drift is
-   computed live at **submit**, which is the only phase that connects. Nothing
-   on disk can go stale, and drafting quality is never coupled to connectivity —
-   you can prepare and verify a dozen repos on a plane.
+   from citations and bugs, never imported. A `status:` field is a verify
+   **error**, not a warning — a spec's `[x]` is a claim, not a fact.
+2. **No sync-state file.** Both phases are strictly local, so nothing on disk
+   can go stale, and drafting quality is never coupled to connectivity — you
+   can prepare and verify a dozen repos on a plane.
 3. **Templates live in this plugin.** The customer's directory contains only
    their truth — never a leftover placeholder.
 
@@ -39,7 +36,7 @@ something is wrong in SakalMaster, you fix the file and submit again.
 
 ```
 .sakal/
-  config.yaml                 scope, project, app, target host + project id
+  config.yaml                 scope, project, app
   registry/personas.yaml      who it is for
   registry/goals.yaml         what it is for
   registry/modules.yaml       business capabilities (+ features)
@@ -64,7 +61,7 @@ along that seam:
 
 | Layer | Owns | Lives |
 |---|---|---|
-| **project** | goals, personas, modules, journeys, **epics** | one repo's `.sakal/`, or the server |
+| **project** | goals, personas, modules, journeys, **epics** | one repo's `.sakal/` (the spec-home) |
 | **app** | stories, ACs, tasks, bugs | each codebase's own `.sakal/` |
 
 `config.yaml` says which layer this directory carries:
@@ -72,28 +69,25 @@ along that seam:
 - `scope: project` — this repo owns the project layer. A single-repo project
   uses this and carries **both** layers in one `.sakal/`.
 - `scope: app` — this repo carries only its own stories. The project layer
-  already exists on the server.
+  lives in the spec-home repo's own `.sakal/` tree, a different checkout.
 
 **Under `scope: app` you REFERENCE, you never re-draft.** Use the project
-layer's keys. Offline you cannot resolve them and verify does not pretend to —
-a reference is a claim, and **submit** is where claims are checked against the
-real thing. If a story needs a persona or epic that does not exist yet, do not
-quietly invent it: put it in `.sakal/proposals/`, which verify acknowledges and
-submit never sends. Verify errors on any project-layer file DEFINED in an
-app-scoped tree.
+layer's keys. This tree cannot resolve them (they live in a different
+checkout) and verify does not pretend to — a reference is a claim this tree
+cannot check. If a story needs a persona or epic that does not exist yet, do
+not quietly invent it: put it in `.sakal/proposals/`, which verify
+acknowledges and which a human carries to the spec-home repo by hand. Verify
+errors on any project-layer file DEFINED in an app-scoped tree.
 
 ## PREPARE
 
-1. **No preconditions. PREPARE IS OFFLINE.** It reads the repo and writes files;
-   it does not need SakalMaster and must never block on it. If the MCP happens
-   to be connected you MAY read the server back and print the delta as
-   enrichment — and if the user denies that call, print
-   *"offline — server state unknown; delta will be shown at submit"* and carry
-   on. Never prompt for a connection.
-2. **Print the DECLARED target** — project, app, host — and say plainly that it
-   is a declaration. It is written into `config.yaml` from the repo and what the
-   user tells you; **submit** is where the claim is checked against the server,
-   and where it is refused with a `config.yaml` message if it does not resolve.
+1. **No preconditions. PREPARE IS OFFLINE.** It reads the repo and writes
+   files; there is no server involved at any point. Never prompt for a
+   connection.
+2. **Print the DECLARED target** — project, app — and say plainly that it is
+   a declaration. It is written into `config.yaml` from the repo and what the
+   user tells you; verify is what flags a declaration that does not resolve
+   (e.g. an `app:` key the spec-home registry disagrees with).
 3. **Read the repo's reality**, in this order: a spec set (`docs/specs/`,
    `specs/`, whatever it actually uses — look, do not assume), then README and
    `docs/`, then open issues via `gh`, then the code's own module and route
@@ -119,14 +113,6 @@ zero-AC extraction from an AC-bearing file must stay impossible. The model's
 share of prepare is judgment: the cites JSON (honest evidence or `[]` with a
 reason) and the app profile.
 
-### `prepare --from-server`
-
-For a project created in the app before any files existed. Reads what is live
-and materialises `.sakal/` from it, so an in-app-first customer joins the
-file-based world without re-drafting. Sources come back as
-`source: none (drafted)` — the server does not know which document justified a
-story, and pretending otherwise would fake provenance.
-
 ## VERIFY
 
 ```
@@ -135,8 +121,7 @@ node <plugin>/lib/sakal-verify.mjs [--scope <selector>]
 
 Zero dependencies, and **strictly local — there is no server mode and no flag**.
 It lints files, which means it works on a plane. Reports `file:line` with a fix,
-so a correction is an edit and not a conversation. **Green verify is a hard
-precondition for submit.**
+so a correction is an edit and not a conversation.
 
 The house schema in `CONVENTIONS.md` is enforced here mechanically — naming,
 granularity bounds, AC voice — as **warnings** in this release, so a fleet
@@ -147,8 +132,6 @@ format and uniqueness · every reference resolves (story → epic, journey,
 persona, app, module; journey → goal, persona) · provenance present **and the
 cited section actually exists in the repo** · no status fields anywhere · AC
 kind present and known · scope rules · and the mechanical parts of CONVENTIONS.md.
-Drift and submit-readiness are **not** here: they need the server, so they
-belong to submit.
 
 **Lintable vs judgment.** Lintable: vagueness ("properly", "various"),
 more-than-one-claim ACs, story-sentence shape, welded evidence, and everything
@@ -161,26 +144,10 @@ text — is a warning every run, by ruling. It is imported **as-is**: someone
 chose those words. It is recorded in `findings.md` so it stays visible, never
 silently rewritten into a citation.
 
-## SUBMIT
-
-0. **Submit is the only phase that touches the server.** No connection → refuse
-   in plain words; the files are unaffected.
-1. Verify must be green (run it again — a stale green is not a green).
-2. **Read SakalMaster back**, check the declared project/app actually resolves
-   (prepare only claimed it), and print the delta — all before writing.
-3. Create only what is missing. Keys are identity: `spec:<app>:<KEY>`.
-4. **Never clobber a newer in-app edit.** If the server holds something the
-   files do not, say so and ask — a human may have edited in the app. Submit
-   never deletes server-side records.
-5. ACs are born open. Tasks land **not** agent-ready — never call
-   `sakal_set_task_agent_ready` during onboarding; that switch is the
-   operator's.
-
 ### Correcting something
 
-Edit the file → verify → submit again. That is the whole loop, and it is why the
-directory is committed. An interrupted submit needs no cleanup: re-run, and the
-keys converge.
+Edit the file → verify again. That is the whole loop, and it is why the
+directory is committed.
 
 ## Unhappy paths
 
@@ -189,10 +156,6 @@ quoted and what was expected instead.
 
 **Provenance rot** — a doc section renamed or deleted after prepare → verify
 flags the stale source as an error. Repoint it, or mark it drafted.
-
-**Two spec items, one GitHub issue** → the database refuses the second link
-(`23505`). Surface it as a spec bug naming both candidates; never silently drop
-one.
 
 **Registry gaps** → named, with where to create them. Under `scope: app` they go
 to `findings.md` for a human, because growing the project layer from inside one

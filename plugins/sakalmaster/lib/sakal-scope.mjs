@@ -81,14 +81,14 @@ if (DECLARED === 'app') {
   if (apps && !linked) {
     refuse(
       'onboarding the APP layer here, but this repo is not a linked codebase in the project.',
-      'Link it first: SakalMaster → Settings → Codebases → add this repository. Then re-run /sakal-onboard-app.')
+      'Link it first: add this repo to registry/codebases.yaml in the spec-home repo. Then re-run /sakal-onboard-app.')
   }
   if (!apps) {
     say('CANNOT CONFIRM — the codebase list was not supplied, so the app link is unverified.')
-    say('  Read the project\'s codebases from the server and pass --apps before writing.')
+    say('  Read the project\'s codebases from registry/codebases.yaml in the spec-home repo and pass --apps before writing.')
     process.exit(2)
   }
-  say(`PROCEED — app layer for "${linked.app}". The project layer is read from the server and referenced, never re-drafted.`)
+  say(`PROCEED — app layer for "${linked.app}". The project layer lives in the spec-home repo and is referenced, never re-drafted.`)
   process.exit(0)
 }
 
@@ -104,7 +104,7 @@ if (linked) {
   process.exit(2)
 }
 if (EMPTY_LAYER) {
-  say('PROCEED — first run. No .sakal/ here and the project layer on the server is empty.')
+  say('PROCEED — first run. No .sakal/ here yet and no project layer declared elsewhere.')
   say('  This creates the project layer from scratch: registry/, journeys.yaml, epics.yaml.')
   process.exit(0)
 }

@@ -1,35 +1,31 @@
 ---
-description: PREPARE the APP layer (stories, ACs, tasks, bugs) for this codebase, referencing the project layer on the server.
+description: PREPARE the APP layer (stories, ACs, tasks, bugs) for this codebase, referencing the project layer in the spec-home repo's own .sakal/ tree.
 ---
 
 ## This phase is OFFLINE
 
-It reads the repo and writes files. It does **not** need the SakalMaster MCP and
-must never block on it. If the tools happen to be present you MAY read the
-server back and print the delta as enrichment; if they are absent, or the user
-denies the call, print one line and carry on:
-
-> offline — server state unknown; delta will be shown at submit.
-
-Never prompt for a connection, never retry, never fail. Target identity is a
-DECLARATION written into `.sakal/config.yaml` from the repo and what the user
-tells you; **submit** is where that claim is checked against the server.
+It reads the repo and writes files. There is no server involved at any point —
+never prompt for a connection, never retry, never fail waiting on one. Target
+identity (`project:`, `app:`) is a DECLARATION written into `.sakal/config.yaml`
+from the repo and what the user tells you.
 
 ## Then
 
-Prepare this repo'"'"'s **app layer** as `scope: app`. **Nothing is sent to
-SakalMaster.** The emission itself is CODE (`lib/sakal-prepare.mjs`) so two
+Prepare this repo'"'"'s **app layer** as `scope: app`. **Nothing leaves this
+machine.** The emission itself is CODE (`lib/sakal-prepare.mjs`) so two
 runs are byte-identical; your work is the parts that need judgment: citations
 and the app profile.
 
 1. **Validate the declaration before writing anything.** Read the project'"'"'s
-   codebases from the server into a temp file, then:
+   linked codebases from `registry/codebases.yaml` in the spec-home repo
+   (e.g. `sakalpos/.sakal/registry/codebases.yaml`) into a temp file, then:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-scope.mjs --declared app --apps <tmp>`
    - exit 1 → print the refusal as-is and stop. The usual cause is that this
      repo is not a linked codebase yet; the refusal says where to link it.
-   - exit 2 → the codebase list was not supplied (offline). Say so, write the
-     declaration anyway, and note that submit will check it.
-2. Print the DECLARED target: project, app, host. Say it is a declaration.
+   - exit 2 → the spec-home repo (or its registry file) was not found. Say so
+     and write the declaration anyway — a human can fix a wrong declaration
+     later, verify will flag a mismatch against the registry.
+2. Print the DECLARED target: project, app. Say it is a declaration.
 3. **Citation duty (the judgment part).** For each AC in the spec set, search
    the checkout for honest evidence and write a cites JSON
    (`{"<story-key>": {"<letter>": {"cite": [...], "reason": "..."}}}`):
@@ -44,7 +40,7 @@ and the app profile.
 4. **App profile.** Write a profile JSON (`setup_cmd`, `verify_cmd`,
    `denylist`, `evidence_format`, `conventions_files`) from the repo'"'"'s own
    tooling (`tool/*.sh`, CLAUDE.md). It lands in `config.yaml` as the
-   `app_profile:` block; submit maps it to the SKM-034 apps columns.
+   `app_profile:` block — local documentation of how to build/verify this repo.
 5. **Run the emitter** — it owns every byte that lands in `.sakal/`:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-prepare.mjs --cites <cites.json> --profile <profile.json> [--seed <seed.json>] [--family <name>]`
    - It pins HEAD (one pin per run) and REFUSES if any spec file differs from
@@ -78,9 +74,9 @@ and the app profile.
      unresolvable-imported references.
 6. **Reference the project layer by key — never re-draft it.** New
    project-layer needs go to `.sakal/proposals/` with a note — acknowledged by
-   verify, never submitted, carried to the spec-home by a human.
+   verify, carried to the spec-home repo by a human.
 
 **End by naming the next step:**
 
-> Prepared N stories. Nothing sent.
-> Next: **/sakal-verify**, then **/sakal-submit** to see what is ready.
+> Prepared N stories.
+> Next: **/sakal-verify**.

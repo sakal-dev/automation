@@ -1,4 +1,10 @@
 # =============================================================================
+# DISCONTINUED (SPOS-267, 2026-08-19): SakalMaster (master.sakal.dev) was
+# discontinued by operator ruling. Integrated mode is dead at runtime;
+# standalone (GitHub-only) mode is the supported path. Retirement or a
+# standalone-default flip is a pending operator decision — see the SPOS-267
+# follow-up. This file is UNCHANGED functionally; this notice is comment-only.
+# =============================================================================
 # report-sakal — run lifecycle reporting into SakalMaster. v2: OIDC-FIRST.
 # Same auth model as claim-sakal: in Actions the step mints a GitHub OIDC
 # token (needs `permissions: id-token: write`) and the exchange returns the

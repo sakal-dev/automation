@@ -2,13 +2,12 @@
 format_version: 1
 
 # project = this .sakal/ owns the project layer (goals, personas, modules,
-#           journeys, epics) — one repo is the project's home.
+#           journeys, epics) — one repo is the project's home (the spec-home).
 # app     = this .sakal/ carries only stories/ACs/tasks/bugs for one codebase
-#           and REFERENCES a project layer that already lives on the server.
+#           and REFERENCES the project layer that lives in the spec-home
+#           repo's own .sakal/ tree, not on a server.
 # A single-repo project uses `scope: project` and carries both layers here.
 scope: project
 
-project: <project key as it appears in SakalMaster>
+project: <project key, matching the spec-home's own config.yaml>
 app: <app key — REQUIRED when scope is app; the codebase this repo is>
-target_host: <https://your-sakalmaster-host  |  http://127.0.0.1:54341>
-target_project_id: <uuid, printed by the skill before the first write>

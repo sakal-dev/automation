@@ -12,7 +12,7 @@
     {
       "name": "sakalmaster",
       "source": "./plugins/sakalmaster",
-      "description": "Onboard a project into SakalMaster: /sakal-onboard turns a repo's specs, docs and issues into journeys, epics, stories, ACs and tasks — dry-run first, nothing written without confirmation, re-runs converge. Install this WITHOUT the agent-automation stack; the two plugins are independent."
+      "description": "Build a committed .sakal/ spec-tracker directory from a repo: /sakal-onboard turns its specs, docs and issues into journeys, epics, stories and ACs — fully local, nothing leaves the machine, re-runs converge. Install this WITHOUT the agent-automation stack; the two plugins are independent."
     }
   ]
 }

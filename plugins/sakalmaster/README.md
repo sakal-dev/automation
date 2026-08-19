@@ -1,7 +1,8 @@
-# SakalMaster plugin
+# sakalmaster plugin
 
-Gets an existing project into SakalMaster, by reading the repo instead of asking
-you to re-type it.
+Turns an existing repo into a structured `.sakal/` spec-tracker directory, by
+reading the repo instead of asking you to re-type it. Fully local — nothing
+this plugin does leaves your machine.
 
 ```
 /plugin marketplace add sakal-dev/automation
@@ -9,16 +10,15 @@ you to re-type it.
 ```
 
 **After installing, and after any update: restart Claude Code.** Plugin
-commands, MCP registration and the tool registry each appear only after a
-restart. If a command says the tools are missing, that is what it means.
+commands only register after a restart. If a command is missing, that is
+what it means.
 
-Then, in your repo — four commands, one purpose each:
+Then, in your repo — three commands, one purpose each:
 
 ```
 /sakal-onboard-project   prepare the project layer (registry, journeys, epics)
 /sakal-onboard-app       prepare this codebase's stories and ACs
-/sakal-verify            the gate — problems in file:line words   (sends nothing)
-/sakal-submit            send verified files to SakalMaster
+/sakal-verify            the gate — problems in file:line words
 ```
 
 The onboarding commands name the layer, so nothing has to stop and ask you
@@ -26,11 +26,10 @@ which one you meant — and each validates that claim against your git remote an
 any existing `.sakal/` before it writes, so declaring the wrong one is refused
 rather than obeyed.
 
-Bare `/sakal-submit` **sends nothing**: it shows what is ready, what is blocked
-and why, and asks. Every command ends by naming the next step, so "what now?"
-is never a question you hold alone.
+Every command ends by naming the next step, so "what now?" is never a
+question you hold alone.
 
-## What happens — three phases over a `.sakal/` directory
+## What happens — two phases over a `.sakal/` directory
 
 1. **PREPARE.** It reads your repo — specs, docs, README, issues, the shape of
    the code — and writes a draft into `.sakal/` as structured files. Nothing
@@ -38,48 +37,38 @@ is never a question you hold alone.
    pointing at the document that justifies it; anything it drafted without a
    document behind it says so.
 2. **VERIFY.** A linter over those files tells you what is wrong in `file:line`
-   terms. You fix it by editing the files and running verify again. Green verify
-   is required before anything can be submitted.
-3. **SUBMIT.** Only verified files go to SakalMaster, through your own
-   credential. It reads the server back first and shows you the delta before it
-   writes.
+   terms. You fix it by editing the files and running verify again.
 
 `.sakal/` is **committed to your repo** by design. It is your project's
 spec-as-code seed, and the working copy for every future correction: something
-wrong in SakalMaster is fixed by editing a file and submitting again.
+wrong in it is fixed by editing a file and re-verifying.
+
+Multi-repo projects split the tree by layer: one repo (the spec-home) carries
+`scope: project` — goals, personas, modules, journeys, epics — and every other
+codebase carries its own `scope: app` tree of stories and ACs, referencing the
+spec-home's keys by name.
 
 ## What it will not do
 
 - **Invent structure.** A repo with less written down gets a smaller draft, and
   the gaps are named. You will not find epics in your tracker that exist nowhere
   in your repo.
-- **Keep a sync-state file.** There is no hidden bookkeeping to go stale — drift
-  is worked out by reading SakalMaster back, live, every time.
-- **Import a status.** Every acceptance criterion is born `open`, including ones
-  your spec marks as done. A spec saying something is finished is a claim; the
-  verifier decides what is actually built by resolving citations against real
-  code. That is the whole point of SakalMaster, and importing claimed statuses
-  would defeat it on day one.
-- **Queue work for agents.** Tasks land not-agent-ready. You flip that switch.
+- **Keep a sync-state file.** There is no hidden bookkeeping to go stale —
+  `.sakal/` is the only record, and it is exactly what is on disk.
+- **Import a status.** Every acceptance criterion is drafted `open`, including
+  ones your spec marks as done. A spec saying something is finished is a claim;
+  citations and bugs are what decide what is actually built, never a copied
+  checkbox.
 - **Delete anything.** A spec section that disappeared is reported, not removed —
   it may still be live work.
 - **Touch `.sakal/context.md`.** That file belongs to the desktop app. This
   skill ignores it and says so.
-- **Ask for your API token in chat.** It belongs in your MCP config. If a skill
-  ever asks you to paste a token into a conversation, refuse.
-
-## Why it writes through the MCP
-
-Every row lands under **your** identity, through the same RPCs and the same
-row-level security the app uses, and shows up in History attributed to you.
-There is no bulk import side door — deliberately. The onboarding path is the
-governed path, so an import cannot create rows that normal usage could not.
 
 ## Requirements
 
-- Claude Code (this is a Claude Code plugin). Without it, use the in-app import.
-- A SakalMaster account with an API token, scope `read+write`.
-- A project, and this repo linked to it as a codebase.
+- Claude Code (this is a Claude Code plugin).
+- A repo with something written down to read from (specs, docs, README, or
+  code structure) — the smaller that is, the smaller the draft.
 
 ## This plugin is independent
 

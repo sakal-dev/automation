@@ -1,4 +1,10 @@
 # =============================================================================
+# DISCONTINUED (SPOS-267, 2026-08-19): SakalMaster (master.sakal.dev) was
+# discontinued by operator ruling. Integrated mode is dead at runtime;
+# standalone (GitHub-only) mode is the supported path. Retirement or a
+# standalone-default flip is a pending operator decision — see the SPOS-267
+# follow-up. This file is UNCHANGED functionally; this notice is comment-only.
+# =============================================================================
 # judge-sakal — the mechanical judge: kill the heartbeat, file citations, report what LANDED
 #
 # MOVED, not rewritten (SKA-040). The engine carried two byte-identical copies

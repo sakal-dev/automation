@@ -2,27 +2,26 @@
 // =============================================================================
 // sakal-verify — the linter over `.sakal/` (SKA-017, Rev 2.1 tree).
 //
-// Nothing reaches SakalMaster until this is green. That is the point of the
-// directory: once data is live it is expensive to correct, so the draft is
-// FILES you can read, edit, diff and re-check while mistakes are still free.
+// The point of the directory: `.sakal/` is the canon record, kept as FILES
+// you can read, edit, diff and re-check while mistakes are still free.
 //
 // ZERO DEPENDENCIES, on purpose. It runs in a customer's repo where the only
 // thing we can assume is the Node that Claude Code already brought. A linter
 // that needs `npm install` first is a linter people skip.
 //
-// THE THREE RULES, enforced on the data and obeyed by this script:
+// THE RULES, enforced on the data and obeyed by this script:
 //   1. No status field anywhere in .sakal/ — files carry inputs; status is
-//      derived server-side. A `status:` key is an ERROR, not a warning.
-//   2. No sync-state file, and NO SERVER MODE. This script is strictly LOCAL —
-//      it lints files and nothing else. Drift and submit-readiness need the
-//      server, so they belong to submit (lib/sakal-plan.mjs), which is the one
-//      phase allowed to touch it. Prepare and verify work on a plane.
+//      derived from citations and bugs, never imported. A `status:` key is
+//      an ERROR, not a warning.
+//   2. No sync-state file, and NO SERVER MODE (SakalMaster is discontinued,
+//      SPOS-267). This script is strictly LOCAL — it lints files and nothing
+//      else. Prepare and verify work on a plane.
 //   3. Templates live in the plugin. This script never writes to .sakal/.
 //
 // `context.md` is the desktop app's pre-existing artifact. It is IGNORED and
 // never touched — we are guests in a namespace the product already owns.
 //
-// Exit: 0 = green (submit allowed) · 1 = errors · 2 = bad invocation
+// Exit: 0 = green · 1 = errors · 2 = bad invocation
 //
 //   node sakal-verify.mjs [--dir .sakal] [--repo-root .] [--scope sel] [--json]
 // =============================================================================
@@ -73,7 +72,7 @@ function parseKV(text, file, startLine = 1) {
     const nested = raw.match(/^\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/)
     if (nested) {
       if (!listKey) return err(file, line, 'PARSE', `"${nested[1]}:" is indented under nothing: "${raw.trim()}"`, 'an indented field needs an open "key:" line above it')
-      if (STATUS_KEYS.has(nested[1].toLowerCase())) return err(file, line, 'STATUSFIELD', `"${nested[1]}" is a status field and must not exist in .sakal/`, 'status is derived server-side')
+      if (STATUS_KEYS.has(nested[1].toLowerCase())) return err(file, line, 'STATUSFIELD', `"${nested[1]}" is a status field and must not exist in .sakal/`, 'status is derived from citations and bugs, never imported')
       out[listKey].fields ??= {}
       out[listKey].fields[nested[1]] = { value: unquote(stripInlineComment(nested[2])), line }
       return
@@ -81,7 +80,7 @@ function parseKV(text, file, startLine = 1) {
     const m = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/)
     if (!m) return err(file, line, 'PARSE', `not "key: value" and not a "- item": "${raw.trim()}"`, 'every line is `key: value` or an indented `- item`')
     const [, k, v] = m
-    if (STATUS_KEYS.has(k.toLowerCase())) err(file, line, 'STATUSFIELD', `"${k}" is a status field and must not exist in .sakal/`, 'status is derived server-side from citations and bugs — files carry inputs only')
+    if (STATUS_KEYS.has(k.toLowerCase())) err(file, line, 'STATUSFIELD', `"${k}" is a status field and must not exist in .sakal/`, 'status is derived from citations and bugs — files carry inputs only')
     if (k in out) err(file, line, 'DUPKEY', `"${k}" is set twice`, `first was line ${out[k].line}`)
     const clean = stripInlineComment(v)
     if (clean === '') { listKey = k; out[k] = { value: [], line, list: true } }
@@ -115,7 +114,7 @@ function parseCollection(path, collection) {
     const sub = raw.match(/^\s+([A-Za-z_]+)\s*:\s*(.*)$/)
     if (sub) {
       if (!current) return err(f, line, 'PARSE', `"${sub[1]}:" does not belong to any entry`, 'indented fields follow a "- key — label" line')
-      if (STATUS_KEYS.has(sub[1].toLowerCase())) return err(f, line, 'STATUSFIELD', `"${sub[1]}" is a status field and must not exist in .sakal/`, 'status is derived server-side')
+      if (STATUS_KEYS.has(sub[1].toLowerCase())) return err(f, line, 'STATUSFIELD', `"${sub[1]}" is a status field and must not exist in .sakal/`, 'status is derived from citations and bugs, never imported')
       current.fields[sub[1]] = { value: unquote(stripInlineComment(sub[2])), line }; return
     }
     err(f, line, 'PARSE', `unrecognised line: "${raw.trim()}"`, 'expected "- key — label" or an indented "field: value"')
@@ -183,7 +182,7 @@ function resolvePinned(uri, file, line, what) {
     }
   }
   if (uri.repo && originRepo && uri.repo !== originRepo) {
-    problems.push({ sev: 'info', file, line, code: 'CROSSREPO', msg: `${what}: source lives in ${uri.repo}, not this repo — not resolvable here`, fix: 'submit checks cross-repo claims against the server' })
+    problems.push({ sev: 'info', file, line, code: 'CROSSREPO', msg: `${what}: source lives in ${uri.repo}, not this repo — not resolvable here`, fix: 'cross-repo claims are not verifiable from this tree; check them in that repo directly' })
     return { content: null }
   }
   err(file, line, 'SRCGONE', `${what}: source ${uri.path}${uri.sha ? `@${uri.sha}` : ''} resolves neither through git nor on disk`, 'the doc moved or the pin is wrong — re-run prepare, or repoint it')
@@ -237,12 +236,12 @@ if (!existsSync(dirAbs)) { console.error(`${DIR}/ does not exist. Run the prepar
 
 const cfgPath = join(dirAbs, 'config.yaml')
 let cfg = {}, scope = 'project'
-if (!existsSync(cfgPath)) err(`${DIR}/config.yaml`, 1, 'MISSING', 'config.yaml is missing', 'it names the target and the scope; submit refuses to guess either')
+if (!existsSync(cfgPath)) err(`${DIR}/config.yaml`, 1, 'MISSING', 'config.yaml is missing', 'it names the target and the scope')
 else {
   cfg = parseKV(readFileSync(cfgPath, 'utf8'), `${DIR}/config.yaml`, 1)
   scope = cfg.scope?.value ?? ''
-  if (!['project', 'app'].includes(scope)) err(`${DIR}/config.yaml`, cfg.scope?.line ?? 1, 'SCOPE', `scope must be "project" or "app" (found "${scope || 'nothing'}")`, 'project = this repo owns the project layer; app = it references a project layer already on the server')
-  for (const k of ['project', 'target_host']) if (!cfg[k]) err(`${DIR}/config.yaml`, 1, 'REQUIRED', `\`${k}\` is required`, 'submit refuses to guess where to write')
+  if (!['project', 'app'].includes(scope)) err(`${DIR}/config.yaml`, cfg.scope?.line ?? 1, 'SCOPE', `scope must be "project" or "app" (found "${scope || 'nothing'}")`, 'project = this repo owns the project layer; app = it references the project layer that lives in the spec-home repo\'s own .sakal/ tree')
+  for (const k of ['project']) if (!cfg[k]) err(`${DIR}/config.yaml`, 1, 'REQUIRED', `\`${k}\` is required`, 'every .sakal/ tree names its project')
   if (scope === 'app' && !cfg.app) err(`${DIR}/config.yaml`, cfg.scope?.line ?? 1, 'REQUIRED', '`app` is required when scope is app', 'it names which codebase these stories belong to')
 }
 
@@ -254,17 +253,17 @@ if (famDecl && !FAMILIES[famDecl])
   err(`${DIR}/config.yaml`, cfg.spec_family.line, 'SCOPE', `spec_family "${famDecl}" is not a known family (${Object.keys(FAMILIES).join(', ')})`, 'prepare writes this; fix the declaration')
 const FAM = FAMILIES[famDecl] ?? FAMILIES.reference
 
-// Project layer: local when scope=project; when scope=app it lives on the
-// server and submit is what checks the references against it.
+// Project layer: local when scope=project; when scope=app it lives in the
+// spec-home repo's own .sakal/ tree, not in this repo.
 const projectLayerLocal = scope !== 'app'
 const projectLayerLocalPre = projectLayerLocal
 const personas = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/personas.yaml'), 'personas') : new Map()
 const goals = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/goals.yaml'), 'goals') : new Map()
 const modules = projectLayerLocal ? parseCollection(join(dirAbs, 'registry/modules.yaml'), 'modules') : new Map()
 // registry/codebases.yaml is PROJECT-layer. Under scope: app the project layer
-// lives on the server and this repo's identity is config.yaml's declaration,
-// checked at submit (SKA-023's doctrine). Requiring the file here contradicted
-// it and failed a healthy tree.
+// lives in the spec-home repo and this repo's identity is config.yaml's own
+// declaration (SKA-023's doctrine). Requiring the file here contradicted it
+// and failed a healthy tree.
 const codebases = projectLayerLocalPre
   ? parseCollection(join(dirAbs, 'registry/codebases.yaml'), 'codebases')
   : (existsSync(join(dirAbs, 'registry/codebases.yaml'))
@@ -273,20 +272,21 @@ const codebases = projectLayerLocalPre
 const journeys = projectLayerLocal ? parseCollection(join(dirAbs, 'journeys.yaml'), 'journeys') : new Map()
 const epics = projectLayerLocal ? parseCollection(join(dirAbs, 'epics.yaml'), 'epics') : new Map()
 
-// Under scope=app the project layer lives on the server, so its keys CANNOT be
-// resolved locally — and that is fine. A reference is a CLAIM; submit is where
-// claims are checked, against the real thing. Verify says so rather than
+// Under scope=app the project layer lives in the spec-home repo's own
+// .sakal/ tree, a different checkout — so its keys CANNOT be resolved
+// locally from here, and that is fine. A reference is a CLAIM this tree
+// cannot check against the real thing; verify says so rather than
 // pretending it verified something it could not see.
 if (scope === 'app') {
   // THE SEAM, ENFORCED (SKA-018 Part 2). An app-scoped directory may not DEFINE
-  // a project-layer entity anywhere except proposals/, which submit never
-  // sends. Definitions elsewhere are an ERROR, not a warning: a warning is
+  // a project-layer entity anywhere except proposals/, which stays local to
+  // this tree. Definitions elsewhere are an ERROR, not a warning: a warning is
   // something you can ship past, and this one silently forks the project layer
   // across eleven repos.
   for (const local of ['registry/personas.yaml', 'registry/goals.yaml', 'registry/modules.yaml', 'journeys.yaml', 'epics.yaml'])
     if (existsSync(join(dirAbs, local)))
       err(`${DIR}/${local}`, 1, 'PROJECTDEF', 'an app-scoped .sakal/ must not DEFINE project-layer entities',
-        `the project layer lives in the spec-home repo. Delete this file and reference the keys instead; if you genuinely need a NEW one, put it in ${DIR}/proposals/ — verify acknowledges it and submit never sends it.`)
+        `the project layer lives in the spec-home repo. Delete this file and reference the keys instead; if you genuinely need a NEW one, put it in ${DIR}/proposals/ and carry it to the spec-home repo by hand.`)
 }
 
 if (projectLayerLocal) {
@@ -316,7 +316,7 @@ const epicDocs = new Map()
     if (end < 0) { err(f, 1, 'NOFM', 'front-matter is never closed with `---`', 'add a closing `---`'); continue }
     const fm = parseKV(lines.slice(1, end).join('\n'), f, 2)
     const key = fm.key?.value
-    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
+    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is this record\'s identity — how other files reference it'); continue }
     if (name !== `${key}.md`) err(f, fm.key.line, 'KEYFMT', `file is ${name} but key is "${key}"`, 'epic docs are named <KEY>.md')
     // Tier/Priority are family facts, not universals (storefront has neither,
     // flutter-pos has no Tier) — required only where the spec carries them,
@@ -385,10 +385,10 @@ const epicDocs = new Map()
 
 // ── journey records: .sakal/journeys/<KEY>.md (SKA-028, A5 ruling B) ────────
 // Walked exactly as epic docs are: frontmatter checks, body fidelity both
-// directions, imported-text exemption. journeys.yaml stays the index (submit
-// iterates it); the file is the record — so an index entry without a record
-// is a WARNING (authoring in progress), but a record without an index entry
-// is an ERROR: submit would silently skip it.
+// directions, imported-text exemption. journeys.yaml stays the index; the
+// file is the record — so an index entry without a record is a WARNING
+// (authoring in progress), but a record without an index entry is an ERROR:
+// anything that reads journeys.yaml first would never see it.
 {
   const dir = join(dirAbs, 'journeys')
   if (existsSync(dir) && scope === 'app')
@@ -402,10 +402,10 @@ const epicDocs = new Map()
     if (end < 0) { err(f, 1, 'NOFM', 'front-matter is never closed with `---`', 'add a closing `---`'); continue }
     const fm = parseKV(lines.slice(1, end).join('\n'), f, 2)
     const key = fm.key?.value
-    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
+    if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is this record\'s identity — how other files reference it'); continue }
     if (name !== `${key}.md`) err(f, fm.key.line, 'KEYFMT', `file is ${name} but key is "${key}"`, 'journey records are named <KEY>.md')
     seen.add(key)
-    if (!journeys.has(key)) err(f, fm.key.line, 'JORPHAN', `journey "${key}" is not in journeys.yaml`, 'the index is what submit iterates — a record without an entry would be silently skipped; add it to journeys.yaml')
+    if (!journeys.has(key)) err(f, fm.key.line, 'JORPHAN', `journey "${key}" is not in journeys.yaml`, 'the index is the canonical list — a record outside it would never surface; add it to journeys.yaml')
     for (const k of ['title', 'goal', 'persona'])
       if (!fm[k]?.value) err(f, fm.key.line, 'REQUIRED', `\`${k}\` is required on a journey record`, 'prepare writes it from journeys.yaml')
     if (fm.goal?.value && goals.size && !goals.has(fm.goal.value)) err(f, fm.goal.line, 'REF', `goal "${fm.goal.value}" is not declared`, 'add it to registry/goals.yaml')
@@ -448,7 +448,7 @@ for (const p of walk(join(dirAbs, 'stories'))) {
   const body = lines.slice(end + 1), bodyStart = end + 2
 
   const key = fm.key?.value
-  if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is the identity SakalMaster converges on'); continue }
+  if (!key) { err(f, 1, 'REQUIRED', '`key` is required', 'the key is this record\'s identity — how other files reference it'); continue }
   if (stories.has(key)) err(f, fm.key.line, 'DUPKEY', `story key "${key}" is used by another file`, `also in ${stories.get(key).file}`)
   stories.set(key, { file: f, line: fm.key.line, refs: {
     epic: fm.epic?.value, journey: fm.journey?.value, persona: fm.persona?.value,
@@ -634,8 +634,8 @@ if (existsSync(proposalsDir)) {
   for (const p of anyFile(proposalsDir)) {
     proposals.push(rel(p))
     problems.push({ sev: 'info', file: rel(p), line: 1, code: 'PROPOSAL',
-      msg: 'project-layer proposal — acknowledged, and NEVER submitted from here',
-      fix: 'carry it to the spec-home repo by hand. Two app repos can propose the same persona and neither can tell — check the spec-home/server before carrying it over.' })
+      msg: 'project-layer proposal — acknowledged, and never auto-carried out of this tree',
+      fix: 'carry it to the spec-home repo by hand. Two app repos can propose the same persona and neither can tell — check the spec-home repo before carrying it over.' })
   }
 }
 
@@ -666,7 +666,7 @@ if (JSON_OUT) {
 }
 
 console.log(`\n  .sakal/ — scope: ${scope} · ${journeys.size} journeys · ${epics.size || epicDocs.size} epics · ${stories.size} stories`)
-console.log(`  target: ${cfg.project?.value ?? '?'}${cfg.app ? ` / ${cfg.app.value}` : ''} @ ${cfg.target_host?.value ?? '?'}\n`)
+console.log(`  target: ${cfg.project?.value ?? '?'}${cfg.app ? ` / ${cfg.app.value}` : ''}\n`)
 for (const p of [...errors, ...warns, ...infos]) {
   const tag = p.sev === 'error' ? '\x1b[31merror\x1b[0m' : p.sev === 'warn' ? '\x1b[33mwarn \x1b[0m' : '\x1b[36minfo \x1b[0m'
   console.log(`  ${tag} ${p.file}:${p.line}  [${p.code}] ${p.msg}`)
@@ -674,10 +674,10 @@ for (const p of [...errors, ...warns, ...infos]) {
 }
 console.log()
 if (errors.length) {
-  console.log(`\x1b[31m  VERIFY FAILED — ${errors.length} error(s), ${warns.length} warning(s). Submit is blocked.\x1b[0m`)
-  console.log('  Fix the files above and run verify again. Nothing has been sent anywhere.\n')
+  console.log(`\x1b[31m  VERIFY FAILED — ${errors.length} error(s), ${warns.length} warning(s).\x1b[0m`)
+  console.log('  Fix the files above and run verify again.\n')
   process.exit(1)
 }
-console.log(`\x1b[32m  VERIFY GREEN — 0 errors, ${warns.length} warning(s). Submit is allowed.\x1b[0m`)
+console.log(`\x1b[32m  VERIFY GREEN — 0 errors, ${warns.length} warning(s).\x1b[0m`)
 console.log('  Warnings are findings, not blockers — they belong in findings.md.\n')
 process.exit(0)
