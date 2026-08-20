@@ -3,6 +3,34 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands only appear after a restart).
 
+## 0.17.0 — the epic-doc DRAFTED exemption + the uncitable-AC convention (SPOS-270)
+
+Proven during SPOS-268's Inventory drift pilot: `checkSource()` gives
+`source: none (drafted — …)` a warning for stories, journeys, and
+`epics.yaml` rows, but the epic-doc source check (`.sakal/epics/<KEY>.md`)
+never got that branch — it called `resolvePinned()` unconditionally, so an
+honestly drafted epic raised a hard SRCGONE error with no way to pass. Live
+damage: 20 permanent errors on the Inventory tree, inherited by every
+scaffold-drafted epic tree in the fleet.
+
+- **The exemption:** an epic doc's `source:` matching `/^none\b/i` now warns
+  DRAFTED, exactly as `checkSource()` does, instead of falling into
+  `resolvePinned()`. A real-but-missing path is unaffected — it still
+  SRCGONE-errors, unchanged.
+- **New: `lib/sakal-verify.test.mjs`** pins both directions by spawning the
+  CLI against throwaway fixture trees (verify runs as a script, not a
+  library of functions, so this is the only honest way to test it): a
+  drafted epic doc warns and does not fail verify; a dead-source epic doc
+  still fails verify with exactly one SRCGONE.
+- **CONVENTIONS.md** documents the uncitable-AC rule SPOS-268's workers
+  improvised: a true-but-statistical AC cites the nearest in-module
+  declaration with the verified figure in `note:`; cross-repo/submodule
+  evidence cites with the sibling repo's own sha and resolves through the
+  working-tree fallback, so `PINMISS` there is expected, not a defect.
+- Live proof: re-running the patched lib read-only against the Inventory
+  module's `.sakal/` tree turns its 20 SRCGONE errors into 20 DRAFTED
+  warnings (0 errors); this repo's own `.sakal/` tree stays at 0 errors.
+
 ## 0.16.0 — local-only: SakalMaster discontinued, SUBMIT retired (SPOS-267)
 
 Operator ruling, 2026-08-19: SakalMaster (`master.sakal.dev`) is discontinued.

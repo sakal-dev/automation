@@ -344,6 +344,11 @@ const epicDocs = new Map()
     // the spec AT THE PIN. Works identically after docs/specs/ is deleted (R1).
     const srcVal = fm.source?.value
     if (!srcVal) { err(f, fm.key.line, 'NOSRC', `epic ${key} has no \`source:\``, 'prepare pins it: <owner>/<repo>:<path>@<short-sha>'); continue }
+    // Same exemption checkSource() gives stories/journeys/epics.yaml rows: a
+    // deliberately drafted epic (no document behind it) is a WARNING, not the
+    // SRCGONE error resolvePinned() would raise for an unresolvable path. A
+    // real-but-missing path still falls through to resolvePinned() and errors.
+    if (/^none\b/i.test(srcVal)) { warn(f, fm.source.line, 'DRAFTED', `epic ${key} is drafted with no document behind it`, 'fine if deliberate — listed so nobody mistakes it for something the repo said'); continue }
     const uri = parseSourceURI(srcVal)
     const r = resolvePinned(uri, f, fm.source.line, `epic ${key}`)
     if (!r.content) continue

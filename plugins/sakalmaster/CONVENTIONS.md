@@ -95,6 +95,26 @@ Every story and every AC carries `source:`.
 - A source pointing at a document that no longer exists is an **error**, not a
   warning: it looks like evidence and is not.
 
+## Uncitable ACs (SPOS-270)
+
+Two shapes of true AC that a `cite:` cannot point at directly:
+
+- **True-but-statistical** — an AC asserting an aggregate ("89 permission
+  cases", "20 epics"), where no single declaration IS the count. Cite the
+  nearest in-module declaration that the figure was counted from or against
+  (the enum, the loop, the directory), and put the verified figure — and how
+  it was verified — in that cite's `note:`. The citation anchors the claim to
+  code that can drift and be re-checked; the note carries what a symbol lookup
+  cannot.
+- **Cross-repo / submodule evidence** — an AC proven by code that lives in a
+  sibling repo, not this one. Cite it with `sha:` set to *that repo's own*
+  commit, not this repo's. Verify cannot `git show` a sha from a repo it
+  is not inside, so this always falls through to the **working-tree
+  fallback** and reports `PINMISS` — expected, not a defect. It means "found
+  on disk, pin unresolvable from here," which is the honest state for
+  evidence outside this checkout. Do not chase it to zero by dropping the
+  cite or forging a local sha.
+
 ## Imported vs authored — the precedence rule (SKA-025, ruled)
 
 A re-extracted tree carries two kinds of text, and two different laws apply:
