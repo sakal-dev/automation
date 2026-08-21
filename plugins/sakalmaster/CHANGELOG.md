@@ -3,6 +3,87 @@
 Update note per release. **After any update: restart Claude Code** (plugin
 commands only appear after a restart).
 
+## 0.18.0 — the citation grammar grows five symbol kinds, and the trees map (F1 + A13)
+
+Eleven citation waves across the pos-laravel fleet (~4,160 ACs) hit the same
+wall: `findDeclaration`/`findTestLabel` could not match symbols that ACs
+legitimately need to cite, so every wave either escalated or filed a weaker
+citation — drift reintroduced by the process meant to remove it.
+
+**F1 — `symbol_kind:`, a new OPTIONAL cite field.** `kind:` still carries the
+proof and still has exactly two values (`enforced` = the code declares it,
+`verified` = a test asserts it). `symbol_kind:` says what KIND of thing
+`symbol:` names. Omitted, it is `declaration` under enforced and `test` under
+verified — 0.17.0's behaviour byte for byte, which is what keeps every existing
+citation verifying.
+
+- `route` — a route name, matched against the `->name(…)` / `'as' => …`
+  literals in the cited file. Laravel composes most names from group prefixes,
+  so a composition of declared prefixes is accepted and reported as
+  `CITECOMPOSED` — never silently equated to an exact hit.
+- `config` — a dotted config key, matched against the real nested KEY PATHS of
+  the cited file (a bare leaf name does not pass; `order.tax.enabled` will not
+  match some other `'enabled' =>`).
+- `view` — a template name, proven by the cited path being the file the name
+  resolves to (`pos::receipts.duplicate` → `…/receipts/duplicate.blade.php`).
+- `enum_case` — `case <Name>` in the cited file; writing `Type::Case` also
+  requires that enum's own declaration there.
+- `measured` — the true-but-uncitable statistic, made citable: `count:` +
+  `count_pattern:` are **re-counted at the pin** over the file's lines, or a
+  directory's entries. The figure drifts, the AC goes red. 0.17.0's convention
+  (park the number in a `note:`) could never do that.
+- **PHPUnit method-style tests are test labels now.** `findTestLabel` matches
+  `function test_*()` and `#[Test]`/`@test`-annotated methods, so test evidence
+  stops being filed under `enforced` with an apologetic note. The annotation
+  must be ATTACHED to the method — the previous method's `#[Test]` does not
+  bless the helper below it.
+
+Every one fails loudly and specifically: the message names the symbol, the file
+and, where it can, what the file DOES declare.
+
+**A13 — cross-repo resolution.** New project-layer `registry/trees.yaml` maps
+each app key to that repo's `.sakal/` tree; an app tree reaches it with
+`project_layer:` in its own `config.yaml`. It makes three things checkable that
+were checked nowhere:
+
+- **Cross-repo citations.** `path: <tree-key>:<path>` resolves inside the
+  owning repo, against **that repo's own `sha:`** — so a cross-repo cite is
+  verified like any other instead of being a guaranteed `PINMISS` (0.17.0's
+  documented best case) or a hard `CITEGONE`. An undeclared tree key is an
+  `XTREE` error; there is no quiet path.
+- **`scope: app` references to project keys** (`epic`, `journey`, `persona`,
+  `module`, `app`). Warnings (`XREF`) by default — the same ruling the
+  granularity bounds got — with `--strict-xref` to make them the gate.
+- **`superseded_by: <tree-key>[:<EPIC-KEY>]`** on a retired `epics.yaml` row:
+  BE-03/BE-08/BE-14 currently point at prose. Resolved through the map every
+  run, and a row that resolves reports `RETIRED` instead of `DRAFTED`.
+
+The trees map is itself checked where it lives: a path that does not exist
+(`TREEGONE`), a tree with no `config.yaml` (`TREECFG`), and a map key that
+disagrees with that tree's own `app:` (`TREEAPP`).
+
+**Also fixed: `--json` was truncated at 64 KiB.** `process.exit()` discards a
+pending pipe write, so any tree whose report passed the OS pipe buffer handed
+its consumer half a document. Found on `pos-laravel/modules/POS` (79 KB, exit
+before flush). Now `process.exitCode` + a natural exit. git's own `fatal:`
+chatter is swallowed too — an unresolvable pin is a reported problem, not stderr
+noise interleaved with the report.
+
+**prepare keeps up.** `existingCites` reads the full `CITE_FIELDS` list and
+`confirmCite` uses the shared `matchCitation`, so a re-run cannot silently
+delete a `symbol_kind`/`count` or drop a cross-repo cite it does not understand
+— which would have un-proven the very ACs this release exists to prove.
+
+- **Tests: 7 → 57 CLI fixture tests** (`lib/sakal-verify.test.mjs`), positive
+  AND negative for every new symbol kind, plus 28 new unit tests in
+  `lib/sakal-shared.test.mjs` for the matcher edge cases (config key paths,
+  route composition, Dart enums, attached annotations). 239 tests total, green.
+- **Backward compatibility, measured:** verify was run over all 22 `.sakal/`
+  trees in the SakalPOS workspace (1,405 stories, 312 epic docs, 5,745
+  citations) before and after. The per-tree problem census is IDENTICAL except
+  that `modules/POS` now reports at all (it was the 64 KiB truncation victim).
+  0 errors fleet-wide, before and after.
+
 ## 0.17.0 — the epic-doc DRAFTED exemption + the uncitable-AC convention (SPOS-270)
 
 Proven during SPOS-268's Inventory drift pilot: `checkSource()` gives

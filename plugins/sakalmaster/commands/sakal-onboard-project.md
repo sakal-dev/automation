@@ -11,11 +11,11 @@ from the repo and what the user tells you.
 
 ## Then
 
-Prepare this repo'"'"'s **project layer** — `registry/`, `journeys.yaml`,
+Prepare this repo's **project layer** — `registry/`, `journeys.yaml`,
 `epics.yaml`, `decisions.md` — as `scope: project`. Run this in the
 spec-home repo. **Nothing leaves this machine.**
 
-1. **Validate the declaration before writing anything.** Read the project'"'"'s
+1. **Validate the declaration before writing anything.** Read the project's
    linked codebases from `registry/codebases.yaml` in this repo, format them as
    `[{"app":"…","repo":"owner/name"}]`, write that to a temp file, then:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-scope.mjs --declared project --apps <tmp> [--project-layer-empty]`
@@ -23,10 +23,17 @@ spec-home repo. **Nothing leaves this machine.**
    - exit 2 → it needs a human confirmation (this repo is also a linked
      codebase). Show the text and ask before writing.
 2. Print the DECLARED target: project, app. Say it is a declaration.
-3. Read the repo'"'"'s reality and draft the project layer from
+3. Read the repo's reality and draft the project layer from
    `${CLAUDE_PLUGIN_ROOT}/templates/sakal/`. Every journey and epic carries
    `source:`; anything drafted without a document says `source: none (drafted)`.
-4. Do **not** write stories here — those belong to app repos (or to this one,
+4. **In a multi-repo project, write `registry/trees.yaml`** — which `.sakal/`
+   tree is where (template in `templates/sakal/registry/`). It is what makes
+   cross-repo citations, `scope: app` references to project keys, and
+   `superseded_by:` on a retired epic resolvable at all; without it they are
+   prose or a hard error. Each app repo then points back at this one with
+   `project_layer:` in its own `config.yaml`. Skip it in a single-repo
+   project — there is nothing to map.
+5. Do **not** write stories here — those belong to app repos (or to this one,
    run separately as `/sakal-onboard-app`, in a single-repo project).
 
 **End by naming the next step:**

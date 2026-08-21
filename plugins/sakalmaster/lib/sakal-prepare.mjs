@@ -52,6 +52,8 @@ import {
   CONSUMES_SLOT, expandConventionIncludes, denylistFromRules,
   sectionByAnchor, readCollection, renderJourneyDoc,
   findDeclaration, findTestLabel, readScalars,
+  matchCitation, SYMBOL_KINDS, SYMBOL_KIND_PROOF, defaultSymbolKind, CITE_FIELDS,
+  treesFileFor, readTreesMap, parseTreePath,
 } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
@@ -92,16 +94,23 @@ try {
 } catch { /* no origin */ }
 
 const showCache = new Map()
-function gitShow(sha, path) {
-  const k = `${sha}:${path}`
+function gitShow(sha, path, root = ROOT) {
+  const k = `${root} ${sha}:${path}`
   if (showCache.has(k)) return showCache.get(k)
   let out = null
   // `sha:./path` resolves relative to the working directory, which is what a
   // repo-root run AND a subdirectory spec-home (Business/ inside a parent
   // repo) both need; bare `sha:path` is repo-root-relative and breaks the
-  // latter.
-  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:./${path}`], { encoding: 'utf8' }) } catch { out = null }
+  // latter. `root` is this repo unless the cite names another tree (A13).
+  try { out = execFileSync('git', ['-C', root, 'show', `${sha}:./${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { out = null }
   showCache.set(k, out); return out
+}
+/** Directory listing at a pin — what a `measured` cite over a directory counts. */
+function gitListDir(sha, path, root = ROOT) {
+  try {
+    return execFileSync('git', ['-C', root, 'ls-tree', '--name-only', `${sha}:./${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\n').filter(Boolean)
+  } catch { return null }
 }
 
 // ── inputs ──────────────────────────────────────────────────────────────────
@@ -221,20 +230,54 @@ function existingCites(body) {
     if ((m = raw.match(/^-\s+ac:\s*(\S+)\s*$/))) { ac = m[1]; cite = null; out.set(ac, []); continue }
     if (!ac) continue
     if ((m = raw.match(/^\s+-\s+kind:\s*(\S+)\s*$/))) { cite = { kind: m[1] }; out.get(ac).push(cite); continue }
-    if (cite && (m = raw.match(/^\s+(path|symbol|note):\s*(.*)$/))) cite[m[1]] = yamlUnquote(m[2])
+    // CITE_FIELDS, not a private list: a field prepare cannot read is a field
+    // prepare DELETES on the next run. 0.18's symbol_kind/count/count_pattern
+    // would have been silently erased — un-proving every AC that used them.
+    if (cite && (m = raw.match(new RegExp(`^\\s+(${CITE_FIELDS.join('|')}):\\s*(.*)$`)))) cite[m[1]] = yamlUnquote(m[2])
   }
   return out
 }
 
 // ── cite confirmation (the honesty gate, in code) ───────────────────────────
+// Same matcher as verify's, by construction (matchCitation), and the same
+// cross-repo resolution: `<tree-key>:<path>` is re-confirmed inside the tree
+// that owns it, pinned to THAT repo's HEAD — because pinning a sibling repo's
+// file to this repo's sha is a claim about bytes we never read.
+const treesMap = (() => {
+  const { file, ownerRoot } = treesFileFor({ root: ROOT, dirAbs, cfg })
+  try { return readTreesMap(file, ownerRoot) } catch { return new Map() }
+})()
+const headCache = new Map()
+function treeHead(root) {
+  if (headCache.has(root)) return headCache.get(root)
+  let sha = null
+  try { sha = execFileSync('git', ['-C', root, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { sha = null }
+  headCache.set(root, sha); return sha
+}
 function confirmCite(c, where) {
   if (!c || !c.kind || !c.path || !c.symbol) { report.dropped.push(`${where}: malformed cite ${JSON.stringify(c)} — needs kind/path/symbol`); return null }
   if (c.kind !== 'enforced' && c.kind !== 'verified') { report.dropped.push(`${where}: kind "${c.kind}" is not enforced|verified`); return null }
-  const content = gitShow(pin, c.path)
-  if (content == null) { report.dropped.push(`${where}: ${c.path} does not exist at ${pin} — cite dropped`); return null }
-  const line = c.kind === 'enforced' ? findDeclaration(content, c.symbol) : findTestLabel(content, c.symbol)
-  if (!line) { report.dropped.push(`${where}: no ${c.kind === 'enforced' ? 'declaration' : 'test label'} "${c.symbol}" greps in ${c.path}@${pin} — cite dropped`); return null }
-  return { kind: c.kind, path: c.path, symbol: c.symbol, note: c.note ?? null }
+  const sk = c.symbol_kind || defaultSymbolKind(c.kind)
+  if (!SYMBOL_KINDS.has(sk)) { report.dropped.push(`${where}: symbol_kind "${sk}" is not one of ${[...SYMBOL_KINDS].join(', ')}`); return null }
+  if (SYMBOL_KIND_PROOF[sk] !== c.kind) { report.dropped.push(`${where}: symbol_kind "${sk}" belongs under kind: ${SYMBOL_KIND_PROOF[sk]}, not kind: ${c.kind}`); return null }
+
+  const q = parseTreePath(c.path)
+  let root = ROOT, path = c.path, sha = pin
+  if (q) {
+    const t = treesMap.get(q.tree)
+    if (!t) { report.dropped.push(`${where}: cites ${q.tree}:… but "${q.tree}" is not in the trees map (${[...treesMap.keys()].join(', ') || 'no map reachable'}) — cite dropped`); return null }
+    root = t.root; path = q.path; sha = treeHead(t.root)
+    if (!sha) { report.dropped.push(`${where}: ${q.tree} has no resolvable git HEAD at ${t.root} — cite dropped`); return null }
+  }
+  let content = gitShow(sha, path, root), entries = null
+  if (content == null && sk === 'measured') entries = gitListDir(sha, path, root)
+  if (content == null && entries == null) { report.dropped.push(`${where}: ${c.path} does not exist at ${sha} — cite dropped`); return null }
+  const m = matchCitation({ ...c, symbol_kind: sk }, { content, entries, path })
+  if (!m.ok) { report.dropped.push(`${where}: ${m.why} (at ${sha}) — cite dropped`); return null }
+  const out = { kind: c.kind, path: c.path, symbol: c.symbol, note: c.note ?? null, sha }
+  if (c.symbol_kind) out.symbol_kind = c.symbol_kind
+  if (sk === 'measured') { out.count = c.count; out.count_pattern = c.count_pattern }
+  return out
 }
 
 // ── emit ────────────────────────────────────────────────────────────────────

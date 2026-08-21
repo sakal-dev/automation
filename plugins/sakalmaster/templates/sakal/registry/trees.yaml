@@ -1,0 +1,23 @@
+# Which `.sakal/` tree is where. PROJECT layer — this file lives in the
+# spec-home only; an app repo REACHES it by declaring, in its own
+# .sakal/config.yaml:
+#
+#     project_layer: ../<spec-home>/.sakal
+#
+# key   = the app key that tree's own config.yaml declares (verify checks the
+#         two agree — a map key that lies is worse than no map)
+# label = path to that repo's .sakal/ DIRECTORY, relative to THIS repo's root;
+#         the tree's repo root is that directory's parent
+#
+# It buys three things nothing else could check:
+#   1. cross-repo citations — `path: <key>:app/Services/Billing.php` resolves
+#      inside that repo, against ITS own `sha:`, instead of failing CITEGONE
+#   2. `scope: app` references to project-layer keys (epic, journey, persona,
+#      module), which were verified NOWHERE before
+#   3. `superseded_by: <key>[:<EPIC>]` on a retired epics.yaml row — a checked
+#      link where there used to be prose
+#
+# Every path is local. Nothing here contacts a network.
+trees:
+  - <app-key> — ../<repo-directory>/.sakal
+    repo: <github-owner>/<repo>          # optional, for humans reading the map

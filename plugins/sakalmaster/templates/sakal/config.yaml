@@ -11,3 +11,11 @@ scope: project
 
 project: <project key, matching the spec-home's own config.yaml>
 app: <app key — REQUIRED when scope is app; the codebase this repo is>
+
+# OPTIONAL, scope: app only. Path to the SPEC-HOME repo's own .sakal/
+# directory, relative to this repo's root. Declaring it lets verify resolve
+# what it otherwise cannot see from here: this tree's references to
+# project-layer keys (epic, journey, persona, module) and its cross-repo
+# citations, through the spec-home's registry/trees.yaml. Omit it and those
+# stay unchecked, exactly as they were before 0.18.
+# project_layer: ../<spec-home>/.sakal

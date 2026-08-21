@@ -7,6 +7,8 @@ import {
   slug, stripInlineComment, unquote, parseSourceURI, normWS, yamlQuote,
   yamlUnquote, wrap, acLetter, parseSpec, findDeclaration, findTestLabel,
   expandConventionIncludes, denylistFromRules, consumesOf,
+  configKeyPaths, findConfigKey, findRouteName, findEnumCase, measureCount,
+  parseTreePath,
 } from './sakal-shared.mjs'
 let pass = 0, fail = 0
 const eq = (got, want, label) => {
@@ -150,6 +152,74 @@ console.log('\n── A3.1: the consumes slot, filtered and joined verbatim')
   const extras = ['**Consumes:** GR-02 (vehicle), P07', '**Implementation synced:** 2026-07-21 · Legend: ✅', '**Journeys:** 1, 14']
   eq(consumesOf(extras), '**Consumes:** GR-02 (vehicle), P07 · **Journeys:** 1, 14', 'slot keys carried, audit metadata excluded')
   eq(consumesOf(['**Last updated:** 2026-06-11']), '', 'non-slot extras yield nothing')
+}
+
+// ── 0.18 (F1/A13): the matcher edge cases the CLI fixtures cannot reach ─────
+console.log('\n── configKeyPaths(): real key PATHS, not leaf names anywhere in the file')
+{
+  const cfg = [
+    '<?php', '// a comment with a stray [ bracket', 'return [',
+    "    'tax' => [", "        'enabled' => env('ORDER_TAX', true),", "        'rate' => 0.1,", '    ],',
+    "    'printer' => array('enabled' => false),", "    'max_devices' => 5,", '];',
+  ].join('\n')
+  eq([...configKeyPaths(cfg).keys()].join(','), 'tax,tax.enabled,tax.rate,printer,printer.enabled,max_devices',
+    'nested [] and array() both descend; env() does not')
+  eq(findConfigKey(cfg, 'order.tax.enabled', 'config/order.php').line, 5, "Laravel's file-name segment is trimmed when the cite carries it")
+  eq(findConfigKey(cfg, 'tax.enabled', 'config/order.php').line, 5, 'and not required')
+  eq(findConfigKey(cfg, 'enabled', 'config/order.php').line, 0, 'a bare leaf name is NOT a key path — this is the whole point')
+  eq(findConfigKey(cfg, 'tax.enabled.deeper', 'config/order.php').line, 0, 'and neither is a path past a scalar')
+}
+
+console.log('\n── findRouteName(): exact, composed, and refused')
+{
+  const routes = [
+    "Route::prefix('api')->name('api.')->group(function () {",
+    "    Route::name('v1.')->group(function () {",
+    "        Route::get('/o', 'C@i')->name('orders.index');",
+    '    });', '});',
+    "Route::get('/p', 'H@p')->name('health.ping');",
+  ].join('\n')
+  eq(findRouteName(routes, 'health.ping').composed, undefined, 'an exact literal is not a composition')
+  eq(findRouteName(routes, 'api.v1.orders.index').parts.join('+'), 'api.+v1.+orders.index', 'group prefixes compose in order')
+  eq(findRouteName(routes, 'api.v1.orders.destroy').line, 0, 'a leaf nobody declared does not compose')
+  eq(findRouteName(routes, 'v1.orders.index').composed, true, 'a partial composition is still a composition — reported, never silently exact')
+  eq(findRouteName("Route::get('/x', 'C@i');", 'anything').known.length, 0, 'a file with no name() literals says so')
+}
+
+console.log('\n── findEnumCase(): PHP cases, Dart members, and the type guard')
+{
+  const php = "enum SubscriptionStatus: string {\n    case Grace = 'grace';\n    case Active;\n}"
+  eq(findEnumCase(php, 'SubscriptionStatus::Grace').line, 2, 'a backed case')
+  eq(findEnumCase(php, 'SubscriptionStatus::Active').line, 3, 'a pure case')
+  eq(findEnumCase(php, 'OtherEnum::Grace').line, 0, 'the type half is checked, not decoration')
+  eq(findEnumCase('enum PayMode { cash, khqr, card }', 'PayMode::khqr').line, 1, 'a Dart enum member')
+  eq(findEnumCase('enum PayMode { cash, khqr }', 'PayMode::crypto').line, 0, 'a member that is not there')
+  eq(findEnumCase("switch (x) {\n    case Grace:\n}", 'Grace').line, 0, 'a switch arm (`case X:`) is NOT an enum case — the colon is what separates them')
+  eq(findEnumCase("enum S {\n    case Grace; // the dunning window\n}", 'Grace').line, 2, 'a trailing comment does not hide a case')
+}
+
+console.log('\n── measureCount(): counts, and refuses a pattern it cannot compile')
+{
+  eq(measureCount(['case A;', 'case B;', 'other'], '^\\s*case ').n, 2, 'lines matching')
+  eq(measureCount(['a.php', 'b.md'], '\\.php$').n, 1, 'entries matching')
+  eq(!!measureCount(['x'], '([').error, true, 'a broken regex is an error, never a silent zero')
+}
+
+console.log('\n── findTestLabel(): PHPUnit methods, and the annotation that must be ATTACHED')
+{
+  const php = ['class T {', '    public function test_a(): void {}', '    #[Test]', '    public function b(): void {}', '    public function helper(): void {}', '}'].join('\n')
+  eq(findTestLabel(php, 'test_a'), 2, 'a test_* method is a label')
+  eq(findTestLabel(php, 'b'), 4, 'an #[Test]-annotated method is a label')
+  eq(findTestLabel(php, 'helper'), 0, 'the PREVIOUS method\'s #[Test] does not bless the next one')
+  eq(findTestLabel("it('does a thing', function () {", 'does a thing'), 1, 'Pest labels still match, unchanged')
+  eq(findTestLabel("group('a group', () {", 'a group'), 0, 'group() still never matches')
+}
+
+console.log('\n── parseTreePath(): only a bare key + colon is cross-repo')
+{
+  eq(parseTreePath('order-module:app/X.php').tree, 'order-module', 'a tree-qualified path')
+  eq(parseTreePath('app/Http/Controllers/X.php'), null, 'a plain path is not')
+  eq(parseTreePath('../POS/app/X.php'), null, 'and neither is a relative sibling path — 0.17.0 trees keep their meaning')
 }
 
 console.log(`\n${fail ? 'FAILED' : 'OK'} — ${pass} passed, ${fail} failed\n`)

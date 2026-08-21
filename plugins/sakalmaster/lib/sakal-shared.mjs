@@ -13,7 +13,8 @@
 //
 // Zero dependencies, still. No YAML library.
 // =============================================================================
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
+import { join, isAbsolute } from 'node:path'
 
 // ── ONE comment-aware scalar reader ─────────────────────────────────────────
 // Strips a trailing ` #…` comment, but never one inside a quoted value:
@@ -500,7 +501,15 @@ export function renderStoryDoc(st, { epicKey, app, specRel, repoId, pin, journey
     else {
       lines.push('  cite:')
       for (const c of list) {
-        lines.push(`    - kind: ${c.kind}`, `      path: ${c.path}`, `      symbol: ${c.symbol}`, `      sha: ${pin}`)
+        lines.push(`    - kind: ${c.kind}`)
+        // symbol_kind sits next to kind because that is how it reads: what
+        // KIND of proof, then what kind of THING the symbol names.
+        if (c.symbol_kind) lines.push(`      symbol_kind: ${c.symbol_kind}`)
+        lines.push(`      path: ${c.path}`, `      symbol: ${c.symbol}`)
+        if (c.count != null && c.count !== '') lines.push(`      count: ${c.count}`, `      count_pattern: ${yamlQuote(String(c.count_pattern ?? ''))}`)
+        // A cross-repo cite carries the OWNING repo's sha (A13). `c.sha ?? pin`
+        // keeps every same-repo cite byte-identical to 0.17.0's output.
+        lines.push(`      sha: ${c.sha ?? pin}`)
         if (c.note) lines.push(`      note: ${c.note}`)
       }
     }
@@ -632,10 +641,16 @@ export function readFencedACs(text) {
     if ((m = raw.match(/^\s+tag:\s*(.*)$/))) { ac.tag = yamlUnquote(m[1]); continue }
     if ((m = raw.match(/^\s+text:\s*(.*)$/))) { ac.text = yamlUnquote(m[1]); continue }
     if ((m = raw.match(/^\s+-\s+kind:\s*(\S+)\s*$/))) { cite = { kind: m[1] }; ac.cites.push(cite); continue }
-    if (cite && (m = raw.match(/^\s+(path|symbol|sha|note):\s*(.*)$/))) { cite[m[1]] = yamlUnquote(m[2]); continue }
+    if (cite && (m = raw.match(new RegExp(`^\\s+(${CITE_FIELDS.join('|')}):\\s*(.*)$`)))) { cite[m[1]] = yamlUnquote(m[2]); continue }
   }
   return acs
 }
+
+/** Every field a cite entry may carry. ONE list — verify refuses anything
+ *  outside it (an unknown field is a typo that would otherwise be dropped in
+ *  silence), prepare carries exactly these forward, and readFencedACs reads
+ *  them. `symbol_kind`/`count`/`count_pattern` are the 0.18 additions. */
+export const CITE_FIELDS = ['path', 'symbol', 'sha', 'note', 'symbol_kind', 'count', 'count_pattern']
 
 // ── ONE declaration / test-label matcher ────────────────────────────────────
 // The cite-honesty rule made mechanical: `enforced` needs an exact-name
@@ -659,8 +674,327 @@ export function findDeclaration(content, symbol) {
   return 0
 }
 export function findTestLabel(content, label) {
-  const re = new RegExp(`\\b(?:test|testWidgets|it)\\s*\\(\\s*(['"])${reEsc(label)}\\1`)
   const lines = String(content).split('\n')
+  const esc = reEsc(label)
+  // Pest / Dart / Jest style: the label is a STRING argument.
+  const re = new RegExp(`\\b(?:test|testWidgets|it)\\s*\\(\\s*(['"])${esc}\\1`)
   for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) return i + 1
+  // PHPUnit method style (0.18). `public function test_foo()` is a test label
+  // in every sense that matters — it is what the runner prints and what a
+  // human greps for — but only findDeclaration ever matched it, which forced
+  // eleven citation waves to file test evidence under `kind: enforced` with
+  // an apologetic note. A method NOT named test* counts only when it is
+  // annotated as a test (`#[Test]`, `@test`), which is PHPUnit's own rule.
+  const method = new RegExp(`\\bfunction\\s+${esc}\\s*\\(`)
+  const ATTR = /#\[\s*(?:[\w\\]+\\)?Test\s*[\]\(]/
+  const DOC = /@test\b/
+  for (let i = 0; i < lines.length; i++) {
+    if (!method.test(lines[i])) continue
+    if (/^test/.test(label)) return i + 1
+    // The annotation must be ATTACHED to this method: walk up through blank
+    // lines, attributes and docblock lines only, and stop at the first line
+    // of real code. A fixed n-line window would let the PREVIOUS method's
+    // `#[Test]` bless the helper below it — which is a false positive, and a
+    // false positive in a citation is a lie with a line number.
+    for (let j = i - 1; j >= 0; j--) {
+      const t = lines[j].trim()
+      if (!t) continue
+      if (!/^(#\[|\/\*|\*|\/\/)/.test(t)) break
+      if (ATTR.test(t) || DOC.test(t)) return i + 1
+    }
+  }
   return 0
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE CITATION GRAMMAR (0.18 — F1)
+//
+// `kind:` still carries the PROOF semantics and still has exactly two values:
+//   enforced — the CODE DECLARES this thing
+//   verified — a TEST ASSERTS this thing
+// That split is the linter's authority and it does not move.
+//
+// `symbol_kind:` is a new OPTIONAL discriminator saying what KIND of thing
+// `symbol:` names, so the matcher knows what to look for. Absent, it is
+// `declaration` for enforced and `test` for verified — byte-identical to
+// 0.17.0, which is what keeps eleven trees of existing citations verifying
+// unchanged. Explicit beats clever here: a dotted `a.b.c` symbol could be a
+// route name OR a config key, and guessing between them is exactly the kind
+// of silent wrong answer a citation must never give.
+// ═════════════════════════════════════════════════════════════════════════════
+export const SYMBOL_KINDS = new Set(['declaration', 'test', 'route', 'config', 'view', 'enum_case', 'measured'])
+export const defaultSymbolKind = kind => (kind === 'verified' ? 'test' : 'declaration')
+/** Which `kind:` each symbol_kind is legal under. A route, config key, view
+ *  or enum case is something the code DECLARES; a test label is something a
+ *  test ASSERTS. Crossing them is a lint error, never a silent pass. */
+export const SYMBOL_KIND_PROOF = {
+  declaration: 'enforced', route: 'enforced', config: 'enforced',
+  view: 'enforced', enum_case: 'enforced', measured: 'enforced', test: 'verified',
+}
+
+// ── route names ─────────────────────────────────────────────────────────────
+// `api.order.v1.admin.orders.index` is assembled by Laravel from group name
+// PREFIXES plus a leaf `->name()`, so the full string very often appears
+// nowhere in the file. Grepping the literal and stopping there would fail
+// most real routes; inventing a route table would need a PHP interpreter.
+// Middle path: collect every route-name literal the file declares, accept an
+// exact hit, and otherwise accept a COMPOSITION of declared dot-terminated
+// prefixes that reconstructs the name exactly. A composition proves every
+// piece is declared in that file — weaker than an exact hit, so callers are
+// told (verify prints CITECOMPOSED) rather than left to assume.
+const ROUTE_LITERALS = [
+  /(?:->|Route\s*::)\s*name\s*\(\s*(['"])([^'"]*)\1/g,
+  /(['"])as\1\s*=>\s*(['"])([^'"]*)\2/g,
+]
+export function routeNameLiterals(content) {
+  const out = new Map()
+  String(content).split('\n').forEach((raw, i) => {
+    for (const src of ROUTE_LITERALS) {
+      const re = new RegExp(src.source, 'g')
+      let m
+      while ((m = re.exec(raw))) { const name = m[m.length - 1]; if (!out.has(name)) out.set(name, i + 1) }
+    }
+  })
+  return out
+}
+export function findRouteName(content, name) {
+  const decls = routeNameLiterals(content)
+  if (decls.has(name)) return { line: decls.get(name), parts: [name] }
+  const prefixes = [...decls.keys()].filter(k => k.endsWith('.') && k.length)
+  const seen = new Set()
+  const compose = (rest, depth) => {
+    if (decls.has(rest)) return [rest]
+    if (depth >= 4 || seen.has(rest)) return null
+    seen.add(rest)
+    for (const p of prefixes) {
+      if (!rest.startsWith(p) || p.length >= rest.length) continue
+      const tail = compose(rest.slice(p.length), depth + 1)
+      if (tail) return [p, ...tail]
+    }
+    return null
+  }
+  const parts = compose(String(name), 0)
+  if (parts) return { line: decls.get(parts[0]), parts, composed: true }
+  return { line: 0, known: [...decls.keys()] }
+}
+
+// ── config keys ─────────────────────────────────────────────────────────────
+// A config key is a path through a nested PHP array literal, so a regex over
+// the leaf name would happily match `'enabled'` under any other branch. This
+// walks the file's bracket structure and builds the real dotted paths, which
+// is the difference between "a key by that name exists somewhere" and "THIS
+// key exists".
+export function configKeyPaths(content) {
+  const text = String(content)
+  const out = new Map()
+  const frames = []                        // { array: bool, key: string|null }
+  let line = 1, pendingKey = null
+  const dotted = k => [...frames.filter(fr => fr.array && fr.key).map(fr => fr.key), k].join('.')
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\n') { line++; continue }
+    if (ch === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; line++; continue }
+    if (ch === '#') { while (i < text.length && text[i] !== '\n') i++; line++; continue }
+    if (ch === '/' && text[i + 1] === '*') {
+      const e = text.indexOf('*/', i + 2)
+      line += (text.slice(i, e < 0 ? text.length : e).match(/\n/g) || []).length
+      i = e < 0 ? text.length : e + 1; continue
+    }
+    if (ch === "'" || ch === '"') {
+      const q = ch, startLine = line
+      let j = i + 1, s = ''
+      while (j < text.length && text[j] !== q) {
+        if (text[j] === '\\') { s += text[j + 1] ?? ''; j += 2; continue }
+        if (text[j] === '\n') line++
+        s += text[j]; j++
+      }
+      i = j
+      if (/^\s*=>/.test(text.slice(j + 1))) { if (!out.has(dotted(s))) out.set(dotted(s), startLine); pendingKey = s }
+      continue
+    }
+    if (ch === '[') { frames.push({ array: true, key: pendingKey }); pendingKey = null; continue }
+    if (ch === '(') {
+      const isArray = /\barray\s*$/.test(text.slice(Math.max(0, i - 10), i))
+      frames.push({ array: isArray, key: isArray ? pendingKey : null })
+      pendingKey = null; continue
+    }
+    if (ch === ']' || ch === ')') { frames.pop(); pendingKey = null; continue }
+    if (ch === ',' || ch === ';') { pendingKey = null; continue }
+  }
+  return out
+}
+export function findConfigKey(content, key, path = '') {
+  const paths = configKeyPaths(content)
+  if (paths.has(key)) return { line: paths.get(key) }
+  // Laravel's file-name segment: `config/order.php` holds `order.*`, and a
+  // cite may or may not carry that first segment. Both readings are accepted,
+  // and only both failing is a miss.
+  const base = String(path).split('/').pop().replace(/\.php$/i, '')
+  const segs = String(key).split('.')
+  if (base && segs.length > 1 && segs[0] === base) {
+    const trimmed = segs.slice(1).join('.')
+    if (paths.has(trimmed)) return { line: paths.get(trimmed), trimmed }
+  }
+  if (base && paths.has(`${base}.${key}`)) return { line: paths.get(`${base}.${key}`) }
+  return { line: 0, known: [...paths.keys()] }
+}
+
+// ── blade / template view names ─────────────────────────────────────────────
+// A view name is a FILE PATH in disguise: `pos::receipts.duplicate` is
+// `…/receipts/duplicate.blade.php`. There is no declaration to grep, so the
+// proof is that the cited path IS the file the name resolves to — the cite's
+// own `path:` is the evidence, and the match is that the two agree.
+export function viewNameTail(name) {
+  const bare = String(name).includes('::') ? String(name).split('::').slice(1).join('::') : String(name)
+  return bare.replace(/\./g, '/')
+}
+export function findViewName(path, name) {
+  const want = viewNameTail(name)
+  const p = String(path).replace(/\\/g, '/')
+  const re = new RegExp(`(?:^|/)${reEsc(want)}\\.(?:blade\\.php|php|twig|vue|html)$`)
+  if (re.test(p)) return { line: 1, want }
+  return { line: 0, want: `${want}.blade.php` }
+}
+
+// ── enum cases ──────────────────────────────────────────────────────────────
+// `case Grace = 'grace';` is a declaration in every language sense, and
+// findDeclaration cannot reach it: `case` sits in its own negative-lookahead
+// list precisely so a switch arm never counts as a declaration. Given
+// `Type::Case`, the enum declaration must be in the same file too — which is
+// what stops `Grace` matching some unrelated enum that happens to share a
+// member name.
+export function findEnumCase(content, symbol) {
+  const parts = String(symbol).split('::')
+  const caseName = parts.length > 1 ? parts[1] : parts[0]
+  const typeName = parts.length > 1 ? parts[0] : null
+  const text = String(content), lines = text.split('\n')
+  if (typeName) {
+    const decl = new RegExp(`(?:^|\\s)(?:enum|class)\\s+${reEsc(typeName)}\\b`)
+    if (!lines.some(l => decl.test(l))) return { line: 0, why: `no \`enum ${typeName}\` declared here` }
+  }
+  const php = new RegExp(`^\\s*case\\s+${reEsc(caseName)}\\s*(?:=|;|$)`)
+  for (let i = 0; i < lines.length; i++) if (php.test(lines[i])) return { line: i + 1 }
+  // Dart / TS-style enum bodies, whose members are bare identifiers.
+  const enumRe = typeName ? new RegExp(`\\benum\\s+${reEsc(typeName)}\\b`) : /\benum\s+\w+/
+  const m = enumRe.exec(text)
+  if (m) {
+    const open = text.indexOf('{', m.index)
+    if (open >= 0) {
+      let depth = 0, close = -1
+      for (let i = open; i < text.length; i++) {
+        if (text[i] === '{') depth++
+        else if (text[i] === '}') { depth--; if (!depth) { close = i; break } }
+      }
+      const body = text.slice(open, close < 0 ? text.length : close)
+      if (new RegExp(`(?:^|[{,\\s])${reEsc(caseName)}\\s*(?:[,;}(=]|$)`, 'm').test(body))
+        return { line: text.slice(0, open).split('\n').length }
+    }
+  }
+  return { line: 0, why: `no \`case ${caseName}\` (or enum member) here` }
+}
+
+// ── measured facts ──────────────────────────────────────────────────────────
+// The AC whose truth is a COUNT — "89 permission cases", "20 epic files".
+// 0.17.0's convention parked the figure in a `note:`, where nothing could
+// ever re-check it, which is drift with a paper trail. A measured cite names
+// the pattern and the number, and verify re-counts both at the pin: add a
+// permission and the AC goes red, which is the entire point of a citation.
+export function measureCount(items, patternSrc) {
+  let re
+  try { re = new RegExp(patternSrc) } catch (e) { return { error: `count_pattern is not a valid regex: ${e.message}` } }
+  return { n: items.filter(s => re.test(s)).length }
+}
+
+// ── A13: the cross-repo seam, as path rules both scripts obey ───────────────
+// One rule, one place. The moment prepare and verify disagree about where a
+// tree lives, prepare emits citations verify cannot resolve — SKA-024 again,
+// with evidence instead of anchors.
+
+/** `<tree-key>:<path>` — the cross-repo citation form. A plain path (and a
+ *  `../sibling/…` path) is deliberately NOT this: only a bare key followed by
+ *  a colon qualifies, so nothing that verifies today changes meaning. */
+export function parseTreePath(p) {
+  const m = String(p ?? '').match(/^([A-Za-z0-9][A-Za-z0-9._-]*):(.+)$/)
+  return m ? { tree: m[1], path: m[2] } : null
+}
+
+/** Where this tree's trees map lives: its own registry under scope: project,
+ *  the spec-home's under scope: app when `project_layer:` is declared.
+ *  Returns { file, ownerRoot, projectLayerDir } — file may be null. */
+export function treesFileFor({ root, dirAbs, cfg }) {
+  const scope = cfg?.scope?.value ?? cfg?.scope ?? ''
+  const pl = cfg?.project_layer?.value ?? cfg?.project_layer ?? null
+  if (scope !== 'app') return { file: join(dirAbs, 'registry/trees.yaml'), ownerRoot: join(dirAbs, '..'), projectLayerDir: dirAbs }
+  if (!pl) return { file: null, ownerRoot: null, projectLayerDir: null }
+  const dir = isAbsolute(pl) ? pl : join(root, pl)
+  return { file: join(dir, 'registry/trees.yaml'), ownerRoot: join(dir, '..'), projectLayerDir: dir }
+}
+
+/** Read a trees map into `key -> { key, treeAbs, root, repo }`. Labels are
+ *  paths to a `.sakal/` DIRECTORY, relative to the repo root that owns the
+ *  map; a tree's repo root is that directory's parent. */
+export function readTreesMap(file, ownerRoot) {
+  const map = new Map()
+  if (!file || !existsSync(file)) return map
+  for (const e of readCollection(readFileSync(file, 'utf8'), 'trees')) {
+    const label = (e.label ?? '').trim()
+    if (!label) continue
+    const treeAbs = isAbsolute(label) ? label : join(ownerRoot, label)
+    map.set(e.key, { key: e.key, treeAbs, root: join(treeAbs, '..'), repo: e.fields?.repo ?? null })
+  }
+  return map
+}
+
+/** ONE dispatcher, shared by the writer and the checker (SKA-024's rule).
+ *  `content` is the resolved file text; `entries` is a directory listing when
+ *  the cited path IS a directory. Returns `{ ok, line, why, … }` — never a
+ *  bare boolean, because the caller has to be able to say WHY it failed. */
+export function matchCitation(c, { content = null, entries = null, path = '' } = {}) {
+  const sk = c.symbol_kind || defaultSymbolKind(c.kind)
+  if (!SYMBOL_KINDS.has(sk))
+    return { ok: false, why: `symbol_kind "${sk}" is not one of ${[...SYMBOL_KINDS].join(', ')}` }
+  if (SYMBOL_KIND_PROOF[sk] !== c.kind)
+    return { ok: false, why: `symbol_kind "${sk}" belongs under kind: ${SYMBOL_KIND_PROOF[sk]}, not kind: ${c.kind}` }
+  switch (sk) {
+    case 'declaration': {
+      const line = findDeclaration(content ?? '', c.symbol)
+      return line ? { ok: true, line } : { ok: false, why: `no declaration of "${c.symbol}" greps in ${path}` }
+    }
+    case 'test': {
+      const line = findTestLabel(content ?? '', c.symbol)
+      return line ? { ok: true, line }
+        : { ok: false, why: `no test label "${c.symbol}" greps in ${path} — a Pest/Dart \`test(…)\`/\`it(…)\` label, or a PHPUnit \`function ${c.symbol}(\` (test-prefixed, or #[Test]/@test annotated)` }
+    }
+    case 'route': {
+      const r = findRouteName(content ?? '', c.symbol)
+      if (!r.line) return { ok: false, why: `no route named "${c.symbol}" is declared in ${path}${r.known?.length ? ` — names found: ${r.known.slice(0, 5).join(', ')}${r.known.length > 5 ? '…' : ''}` : ' (the file declares no route names at all)'}` }
+      return { ok: true, line: r.line, composed: r.composed ? r.parts : null }
+    }
+    case 'config': {
+      const r = findConfigKey(content ?? '', c.symbol, path)
+      if (!r.line) return { ok: false, why: `config key "${c.symbol}" is not a key path in ${path}${r.known?.length ? ` — keys found: ${r.known.slice(0, 6).join(', ')}${r.known.length > 6 ? '…' : ''}` : ' (no `key =>` pairs found at all)'}` }
+      return { ok: true, line: r.line }
+    }
+    case 'view': {
+      const r = findViewName(path, c.symbol)
+      if (!r.line) return { ok: false, why: `view "${c.symbol}" resolves to …/${r.want}, which is not the cited path ${path}` }
+      return { ok: true, line: 1 }
+    }
+    case 'enum_case': {
+      const r = findEnumCase(content ?? '', c.symbol)
+      if (!r.line) return { ok: false, why: `${r.why} in ${path} (cited as enum case "${c.symbol}")` }
+      return { ok: true, line: r.line }
+    }
+    case 'measured': {
+      const want = Number(c.count)
+      if (!Number.isInteger(want) || want < 0) return { ok: false, why: `\`count: ${c.count}\` is not a non-negative integer` }
+      const items = entries ?? String(content ?? '').split('\n')
+      const got = measureCount(items, c.count_pattern)
+      if (got.error) return { ok: false, why: got.error }
+      if (got.n !== want)
+        return { ok: false, why: `measured ${got.n} ${entries ? 'entries' : 'lines'} matching /${c.count_pattern}/ in ${path}, but the cite claims ${want} — the figure drifted, which is exactly what a measured cite exists to catch` }
+      return { ok: true, line: 1, measured: got.n }
+    }
+  }
+  return { ok: false, why: `unhandled symbol_kind "${sk}"` }
 }

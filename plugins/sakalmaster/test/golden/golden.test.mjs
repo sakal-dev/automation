@@ -16,9 +16,11 @@
 // Structure is ready for the D-01 named set: add inputs/<family>/… +
 // expected/<family>/… and a case below. SKA-026 fills the other families.
 // =============================================================================
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFileSync } from 'node:child_process'
 import { parseSpec, detectAcLines, renderEpicDoc, renderStoryDoc, FAMILIES, detectFamilySignals, sectionByAnchor, renderJourneyDoc, readCollection } from '../../lib/sakal-shared.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -243,6 +245,62 @@ console.log('\n── journey records (frontmatter + verbatim narrative)')
   // readCollection reads the index grammar the emitter consumes.
   const idx = readCollection('journeys:\n  - OA-J1 — The label\n    goal: OA-G1\n    persona: owner\n    source: specs/x.md#journey-a\n', 'journeys')
   eq(idx.length === 1 && idx[0].key === 'OA-J1' && idx[0].fields.source === 'specs/x.md#journey-a', true, 'index entries parse: key, label, fields')
+}
+
+// ── 0.18: prepare must not EAT the new citation fields on a re-run ─────────
+// The whole suite above drives the renderers directly. This one drives the
+// prepare CLI end to end, because the dangerous failure is not a render bug:
+// it is prepare reading an existing story with a field it does not know,
+// re-emitting without it, and silently un-proving the AC. That is exactly
+// what would have happened to every symbol_kind/count cite before 0.18.
+console.log('\n── prepare round-trip: symbol_kind and measured survive a re-run')
+{
+  const root = mkdtempSync(join(tmpdir(), 'sakal-prepare-rt-'))
+  const w = (p, body) => { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), body) }
+  w('docs/specs/TS-01-thing.md', [
+    '# Thing App · 01 · The Thing', '',
+    '> **Tier:** MVP · **Priority:** P0', '',
+    '## What to build', '', 'A thing.', '',
+    '## Stories', '',
+    '### TS-01-01 · The first thing',
+    '**As a** cashier',
+    '**I want** a thing',
+    '**So that** it is proven', '',
+    '**Acceptance criteria**',
+    '- [ ] AC-1 — The grace case exists.',
+    '- [ ] AC-2 — There are three permissions.', '',
+  ].join('\n'))
+  w('app/Enums/Status.php', "<?php\nenum Status: string {\n    case Grace = 'grace';\n}\n")
+  w('app/Enums/Perms.php', "<?php\nenum Perms: string {\n    case A = 'a';\n    case B = 'b';\n    case C = 'c';\n}\n")
+  w('.sakal/config.yaml', 'project: fixture\nscope: app\napp: fixture-app\nspec_family: reference\n')
+  const gitq = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  gitq('init', '-q'); gitq('remote', 'add', 'origin', 'https://github.com/fixture/app.git'); gitq('add', '-A')
+  execFileSync('git', ['-C', root, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'f'], { stdio: ['ignore', 'pipe', 'ignore'] })
+  const pin = gitq('rev-parse', '--short', 'HEAD')
+  // The existing story: two cites prepare has never seen the shape of.
+  w('.sakal/stories/TS-01/TS-01-01.md', [
+    '---', 'key: TS-01-01', 'title: The first thing', 'epic: TS-01', 'persona: cashier',
+    'app: fixture-app', 'tags: [P0]', 'out_of_scope: []',
+    `source: fixture/app:docs/specs/TS-01-thing.md#ts-01-01--the-first-thing@${pin}`, '---', '',
+    'As a cashier, I want a thing, so that it is proven.', '',
+    '## Acceptance criteria', '', '```yaml',
+    '- ac: TS-01-01-a', '  text: "The grace case exists."', '  cite:',
+    '    - kind: enforced', '      symbol_kind: enum_case', '      path: app/Enums/Status.php',
+    `      symbol: Status::Grace`, `      sha: ${pin}`,
+    '- ac: TS-01-01-b', '  text: "There are three permissions."', '  cite:',
+    '    - kind: enforced', '      symbol_kind: measured', '      path: app/Enums/Perms.php',
+    '      symbol: Perms', '      count: 3', '      count_pattern: "^\\\\s*case "', `      sha: ${pin}`,
+    '```', '',
+  ].join('\n'))
+  const prep = join(here, '..', '..', 'lib', 'sakal-prepare.mjs')
+  execFileSync(process.execPath, [prep, '--repo-root', root, '--specs', 'docs/specs'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  const out = readFileSync(join(root, '.sakal', 'stories', 'TS-01', 'TS-01-01.md'), 'utf8')
+  eq(/symbol_kind: enum_case/.test(out), true, 'symbol_kind: enum_case survives the round-trip')
+  eq(/symbol_kind: measured/.test(out), true, 'symbol_kind: measured survives')
+  eq(/count: 3/.test(out), true, 'the measured figure survives')
+  eq(/count_pattern: "\^\\\\s\*case "/.test(out), true, 'and so does the pattern it was counted with')
+  eq((out.match(/- kind: enforced/g) || []).length, 2, 'both cites are still there — neither was dropped as unconfirmable')
+  rmSync(root, { recursive: true, force: true })
 }
 
 console.log(`\n${fail ? 'FAILED' : 'OK'} — ${pass} passed, ${fail} failed\n`)

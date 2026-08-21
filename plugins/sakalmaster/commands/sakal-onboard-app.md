@@ -11,12 +11,12 @@ from the repo and what the user tells you.
 
 ## Then
 
-Prepare this repo'"'"'s **app layer** as `scope: app`. **Nothing leaves this
+Prepare this repo's **app layer** as `scope: app`. **Nothing leaves this
 machine.** The emission itself is CODE (`lib/sakal-prepare.mjs`) so two
 runs are byte-identical; your work is the parts that need judgment: citations
 and the app profile.
 
-1. **Validate the declaration before writing anything.** Read the project'"'"'s
+1. **Validate the declaration before writing anything.** Read the project's
    linked codebases from `registry/codebases.yaml` in the spec-home repo
    (e.g. `sakalpos/.sakal/registry/codebases.yaml`) into a temp file, then:
    `node ${CLAUDE_PLUGIN_ROOT}/lib/sakal-scope.mjs --declared app --apps <tmp>`
@@ -38,7 +38,7 @@ and the app profile.
      false claim; the emitter re-greps every cite at the pin and DROPS what
      does not confirm, so guessing only produces report noise.
 4. **App profile.** Write a profile JSON (`setup_cmd`, `verify_cmd`,
-   `denylist`, `evidence_format`, `conventions_files`) from the repo'"'"'s own
+   `denylist`, `evidence_format`, `conventions_files`) from the repo's own
    tooling (`tool/*.sh`, CLAUDE.md). It lands in `config.yaml` as the
    `app_profile:` block — local documentation of how to build/verify this repo.
 5. **Run the emitter** — it owns every byte that lands in `.sakal/`:

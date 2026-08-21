@@ -48,6 +48,14 @@ Multi-repo projects split the tree by layer: one repo (the spec-home) carries
 codebase carries its own `scope: app` tree of stories and ACs, referencing the
 spec-home's keys by name.
 
+Those cross-repo references are only *checkable* if verify knows where the
+other trees are. The spec-home names them in `registry/trees.yaml`, and each
+app repo points back with `project_layer:` in its own `config.yaml`. With that
+in place, a story can cite evidence in a sibling repo
+(`path: <tree-key>:<path>`, pinned to that repo's own sha) and verify resolves
+it there. Without it, cross-repo citations are refused and cross-repo
+references go unchecked — the honest default, and what happened before 0.18.
+
 ## What it will not do
 
 - **Invent structure.** A repo with less written down gets a smaller draft, and

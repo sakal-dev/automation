@@ -25,7 +25,7 @@
 //
 //   node sakal-verify.mjs [--dir .sakal] [--repo-root .] [--scope sel] [--json]
 // =============================================================================
-import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, isAbsolute } from 'node:path'
 import { execFileSync } from 'node:child_process'
 // ONE reader, ONE slugger, ONE spec parser, ONE cite matcher — shared with the
@@ -35,6 +35,8 @@ import {
   stripInlineComment, unquote, slug, anchorMatches, anchorMatchesText,
   parseSourceURI, parseSpec, FAMILIES, consumesOf, sectionByAnchor, normWS,
   yamlUnquote, findDeclaration, findTestLabel,
+  matchCitation, SYMBOL_KINDS, SYMBOL_KIND_PROOF, defaultSymbolKind, CITE_FIELDS,
+  readCollection, treesFileFor, parseTreePath,
 } from './sakal-shared.mjs'
 
 const args = process.argv.slice(2)
@@ -43,10 +45,18 @@ const DIR = opt('--dir', '.sakal')
 const ROOT = opt('--repo-root', '.')
 const SCOPE = opt('--scope', null)   // limit reporting to a subtree or file
 const JSON_OUT = args.includes('--json')
+// Cross-repo references (A13) are WARNINGS by default, following the same
+// ruling CONVENTIONS.md makes for the granularity bounds: a check that did not
+// exist while eleven trees were being written does not get to turn them red on
+// the day it ships. `--strict-xref` promotes them to errors for anyone who has
+// normalised their tree and wants the gate.
+const STRICT_XREF = args.includes('--strict-xref')
 
 const problems = []
 const err = (file, line, code, msg, fix) => problems.push({ sev: 'error', file, line, code, msg, fix })
 const warn = (file, line, code, msg, fix) => problems.push({ sev: 'warn', file, line, code, msg, fix })
+const info = (file, line, code, msg, fix) => problems.push({ sev: 'info', file, line, code, msg, fix })
+const xref = (file, line, code, msg, fix) => (STRICT_XREF ? err : warn)(file, line, code, msg, fix)
 const rel = p => relative(ROOT, p) || p
 
 // Rule 1, everywhere a field can appear.
@@ -149,14 +159,24 @@ function checkSource(src, file, line, what) {
 // load-bearing rather than decorative. Still strictly LOCAL: git objects live
 // in the repo; nothing here contacts a server.
 const showCache = new Map()
-function gitShow(sha, path) {
-  const k = `${sha}:${path}`
+function gitShow(sha, path, root = ROOT) {
+  const k = `${root} ${sha}:${path}`
   if (showCache.has(k)) return showCache.get(k)
   let out = null
   // `sha:./path` is cwd-relative — correct at a repo root AND in a
-  // subdirectory spec-home (Business/ inside a parent repo).
-  try { out = execFileSync('git', ['-C', ROOT, 'show', `${sha}:./${path}`], { encoding: 'utf8' }) } catch { out = null }
+  // subdirectory spec-home (Business/ inside a parent repo). git's own stderr
+  // is swallowed: an unresolvable pin is a REPORTED problem, not a line of
+  // `fatal:` noise interleaved with --json output.
+  try { out = execFileSync('git', ['-C', root, 'show', `${sha}:./${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { out = null }
   showCache.set(k, out); return out
+}
+/** Directory listing at a pin — what a `measured` cite over a directory
+ *  counts. Same two planes as gitShow: the pin first, disk as the fallback. */
+function gitListDir(sha, path, root = ROOT) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-tree', '--name-only', `${sha}:./${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    return out.split('\n').filter(Boolean)
+  } catch { return null }
 }
 let originRepo = null
 try {
@@ -211,8 +231,8 @@ function parseFencedACs(body, bodyStart, file) {
       if (!ac.citeOpen) err(file, line, 'PARSE', 'a cite entry outside an open `cite:` list', 'write `cite:` on its own line, then `- kind: …`')
       cite = { kind: m[1], line }; ac.cites.push(cite); return
     }
-    if (cite && (m = raw.match(/^\s+(path|symbol|sha|note):\s*(.*)$/))) { cite[m[1]] = yamlUnquote(m[2]); return }
-    err(file, line, 'PARSE', `unrecognised line in the AC block: "${raw.trim()}"`, 'expected `- ac:` · `marker:` · `text:` · `cite:` (or `cite: []`) · `- kind:` · path/symbol/sha/note')
+    if (cite && (m = raw.match(new RegExp(`^\\s+(${CITE_FIELDS.join('|')}):\\s*(.*)$`)))) { cite[m[1]] = yamlUnquote(m[2]); cite[`${m[1]}Line`] = line; return }
+    err(file, line, 'PARSE', `unrecognised line in the AC block: "${raw.trim()}"`, `expected \`- ac:\` · \`marker:\` · \`text:\` · \`cite:\` (or \`cite: []\`) · \`- kind:\` · ${CITE_FIELDS.join('/')}`)
   })
   return { acs, sawFence }
 }
@@ -272,6 +292,106 @@ const codebases = projectLayerLocalPre
 const journeys = projectLayerLocal ? parseCollection(join(dirAbs, 'journeys.yaml'), 'journeys') : new Map()
 const epics = projectLayerLocal ? parseCollection(join(dirAbs, 'epics.yaml'), 'epics') : new Map()
 
+// ── A13: the trees map, and the seam it finally makes checkable ─────────────
+// Until now nothing linked the project layer to the module/app trees that
+// carry its stories. `epics.yaml` rows pointed at prose ("superseded by
+// pos-laravel/modules/Order .sakal/ …"), `scope: app` references to project
+// keys were checked NOWHERE, and a citation into a sibling repo was a hard
+// CITEGONE — three symptoms of one missing fact: which .sakal/ tree is where.
+//
+// `registry/trees.yaml` is that fact, in the same `- key — label` collection
+// grammar as codebases.yaml:
+//
+//     trees:
+//       - order-module — ../pos-laravel/modules/Order/.sakal
+//         repo: sakal-dev/sakal
+//
+// key   = the app key that tree's own config.yaml declares (checked)
+// label = path to the .sakal/ DIRECTORY, relative to the repo root that owns
+//         this file — its repo root is that path's parent (checked)
+//
+// It is PROJECT-layer: the spec-home owns it, and an app tree reaches it by
+// declaring `project_layer: <path to the spec-home .sakal/>` in config.yaml.
+// Both are OPTIONAL. Declare neither and every check below is skipped and
+// verify behaves exactly as 0.17.0 did — which is what lets eleven already
+// green trees stay green on the day this ships.
+let projectLayerDir = projectLayerLocal ? dirAbs : null
+if (cfg.project_layer?.value) {
+  const pl = isAbsolute(cfg.project_layer.value) ? cfg.project_layer.value : join(ROOT, cfg.project_layer.value)
+  if (projectLayerLocal)
+    warn(`${DIR}/config.yaml`, cfg.project_layer.line, 'PROJLAYER', '`project_layer:` is meaningless under scope: project — this tree IS the project layer', 'delete the key, or change the scope')
+  else if (!existsSync(join(pl, 'config.yaml')))
+    err(`${DIR}/config.yaml`, cfg.project_layer.line, 'PROJLAYER', `project_layer points at ${cfg.project_layer.value}, which is not a .sakal/ directory (no config.yaml there)`, 'it names the SPEC-HOME repo\'s own .sakal/ — a path relative to this repo root; delete the key to go back to unchecked references')
+  else projectLayerDir = pl
+}
+// ONE path rule, in sakal-shared, obeyed by prepare and verify alike.
+const { file: treesFileRaw, ownerRoot: treesOwnRootRaw } =
+  treesFileFor({ root: ROOT, dirAbs, cfg: { scope: { value: scope }, project_layer: projectLayerDir && !projectLayerLocal ? { value: projectLayerDir } : null } })
+const treesFile = projectLayerLocal || projectLayerDir ? treesFileRaw : null
+const treesOwnRoot = treesOwnRootRaw
+const treesDeclared = !!(treesFile && existsSync(treesFile))
+// Integrity of the map is reported ONLY where the map lives. An app tree that
+// merely READS the spec-home's map must not print errors about a file it does
+// not own — its own report would then be full of somebody else's homework.
+// readCollection is the VALUES reader (an array, plain field strings);
+// parseCollection is the line-numbered one that reports problems. Same shape
+// out of both here, so the code below never has to know which it got.
+const asEntryMap = list => new Map(list.map(e => [e.key, {
+  key: e.key, label: e.label, line: 1,
+  fields: Object.fromEntries(Object.entries(e.fields ?? {}).map(([k, v]) => [k, { value: v, line: 1 }])),
+}]))
+const treeEntries = treesDeclared
+  ? (projectLayerLocal ? parseCollection(treesFile, 'trees') : asEntryMap(readCollection(readFileSync(treesFile, 'utf8'), 'trees')))
+  : new Map()
+const treesMap = new Map()
+for (const [key, t] of treeEntries) {
+  const label = (t.label ?? '').trim()
+  const treeAbs = isAbsolute(label) ? label : join(treesOwnRoot, label)
+  const entry = { key, treeAbs, root: join(treeAbs, '..'), repo: t.fields?.repo?.value ?? null }
+  treesMap.set(key, entry)
+  if (!projectLayerLocal) continue    // integrity is the owner's report, not ours
+  const f = `${DIR}/registry/trees.yaml`
+  if (!existsSync(treeAbs)) { err(f, t.line, 'TREEGONE', `tree "${key}" points at ${label}, which does not exist from ${rel(treesOwnRoot) || '.'}`, 'the label is a path to that repo\'s .sakal/ directory, relative to this repo\'s root — a sibling checkout is usually ../<repo>/.sakal'); continue }
+  const tcfgPath = join(treeAbs, 'config.yaml')
+  if (!existsSync(tcfgPath)) { err(f, t.line, 'TREECFG', `tree "${key}" exists at ${label} but has no config.yaml`, 'a .sakal/ tree without config.yaml has never been prepared — run /sakal-onboard-app there'); continue }
+  const tcfg = readScalarsSafe(tcfgPath)
+  if (tcfg.app && tcfg.app !== key)
+    err(f, t.line, 'TREEAPP', `tree "${key}" declares \`app: ${tcfg.app}\` in its own config.yaml`, 'the map key IS that tree\'s app key — rename one of them deliberately, because every cross-repo citation resolves through this key')
+  if (tcfg.project && cfg.project?.value && tcfg.project !== cfg.project.value)
+    warn(f, t.line, 'TREEPROJ', `tree "${key}" belongs to project "${tcfg.project}", not "${cfg.project.value}"`, 'legitimate if you deliberately share a tree across projects; usually a wrong path')
+}
+function readScalarsSafe(p) {
+  const out = {}
+  try {
+    for (const raw of readFileSync(p, 'utf8').split('\n')) {
+      const m = raw.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$/)
+      if (m) out[m[1]] ??= unquote(stripInlineComment(m[2]))
+    }
+  } catch { /* unreadable is already reported by the caller */ }
+  return out
+}
+
+// The spec-home's project layer, read-only, for an app tree that declared it.
+// Loaded with the VALUES reader, never parseCollection: parse errors in the
+// spec-home belong in the spec-home's report.
+const remote = { personas: new Map(), goals: new Map(), modules: new Map(), journeys: new Map(), epics: new Map(), codebases: new Map() }
+const remoteLoaded = !projectLayerLocal && !!projectLayerDir
+if (remoteLoaded) {
+  const load = (relPath, collection) => {
+    const p = join(projectLayerDir, relPath)
+    if (!existsSync(p)) return new Map()
+    try { return asEntryMap(readCollection(readFileSync(p, 'utf8'), collection)) } catch { return new Map() }
+  }
+  remote.personas = load('registry/personas.yaml', 'personas')
+  remote.goals = load('registry/goals.yaml', 'goals')
+  remote.modules = load('registry/modules.yaml', 'modules')
+  remote.codebases = load('registry/codebases.yaml', 'codebases')
+  remote.journeys = load('journeys.yaml', 'journeys')
+  remote.epics = load('epics.yaml', 'epics')
+  if (cfg.app?.value && remote.codebases.size && !remote.codebases.has(cfg.app.value))
+    xref(`${DIR}/config.yaml`, cfg.app.line, 'XREF', `app "${cfg.app.value}" is not a codebase in the project layer at ${cfg.project_layer.value}`, `registered apps: ${[...remote.codebases.keys()].slice(0, 8).join(', ')}… — register this one, or fix the app key`)
+}
+
 // Under scope=app the project layer lives in the spec-home repo's own
 // .sakal/ tree, a different checkout — so its keys CANNOT be resolved
 // locally from here, and that is fine. A reference is a CLAIM this tree
@@ -283,7 +403,7 @@ if (scope === 'app') {
   // this tree. Definitions elsewhere are an ERROR, not a warning: a warning is
   // something you can ship past, and this one silently forks the project layer
   // across eleven repos.
-  for (const local of ['registry/personas.yaml', 'registry/goals.yaml', 'registry/modules.yaml', 'journeys.yaml', 'epics.yaml'])
+  for (const local of ['registry/personas.yaml', 'registry/goals.yaml', 'registry/modules.yaml', 'registry/trees.yaml', 'journeys.yaml', 'epics.yaml'])
     if (existsSync(join(dirAbs, local)))
       err(`${DIR}/${local}`, 1, 'PROJECTDEF', 'an app-scoped .sakal/ must not DEFINE project-layer entities',
         `the project layer lives in the spec-home repo. Delete this file and reference the keys instead; if you genuinely need a NEW one, put it in ${DIR}/proposals/ and carry it to the spec-home repo by hand.`)
@@ -298,7 +418,34 @@ if (projectLayerLocal) {
     else if (!personas.has(j.fields.persona.value)) err(f, j.fields.persona.line, 'REF', `persona "${j.fields.persona.value}" is not declared`, 'add it to registry/personas.yaml')
     checkSource(j.fields.source?.value, f, j.fields.source?.line ?? j.line, `journey ${key}`)
   }
-  for (const [key, e] of epics) checkSource(e.fields.source?.value, `${DIR}/epics.yaml`, e.fields.source?.line ?? e.line, `epic ${key}`)
+  // A13: `superseded_by:` turns the retirement prose into a MACHINE LINK.
+  // BE-03/BE-08/BE-14 today say `source: none (retired — superseded by
+  // pos-laravel/modules/Order .sakal/ ORDM-01..20)`: true, unverifiable, and
+  // silently wrong the day that tree is renamed. `superseded_by: <tree-key>`
+  // or `<tree-key>:<EPIC-KEY>` resolves through the trees map and is checked
+  // every run. A row that resolves is RETIRED (info), not DRAFTED (warn) —
+  // it is not "drafted with no document behind it", it moved somewhere real.
+  for (const [key, e] of epics) {
+    const f = `${DIR}/epics.yaml`
+    const sb = e.fields.superseded_by?.value
+    const sbLine = e.fields.superseded_by?.line ?? e.line
+    let retired = false
+    if (sb) {
+      const [treeKey, epicKey] = sb.split(':').map(s => s.trim())
+      const t = treesMap.get(treeKey)
+      if (!treesDeclared)
+        err(f, sbLine, 'XTREE', `epic ${key} is superseded_by "${sb}", but no trees map is reachable`, `write ${DIR}/registry/trees.yaml naming each repo's .sakal/ tree — without it this is prose, not a link`)
+      else if (!t)
+        err(f, sbLine, 'XTREE', `epic ${key} is superseded_by tree "${treeKey}", which is not in the trees map`, `declared trees: ${[...treesMap.keys()].join(', ') || '(none)'}`)
+      else if (epicKey && !existsSync(join(t.treeAbs, 'epics', `${epicKey}.md`)))
+        err(f, sbLine, 'XEPIC', `epic ${key} is superseded_by ${treeKey}:${epicKey}, but that tree has no epics/${epicKey}.md`, 'name an epic doc that exists there, or point at the tree alone')
+      else { retired = true; info(f, sbLine, 'RETIRED', `epic ${key} is retired — superseded by ${epicKey ? `${treeKey}:${epicKey}` : `the ${treeKey} tree`}, resolved and checked`, '') }
+    }
+    // A resolved supersession replaces the source check only when the source
+    // itself says `none` — a row still pointing at a real doc is still held to it.
+    if (retired && /^none\b/i.test(e.fields.source?.value ?? 'none')) continue
+    checkSource(e.fields.source?.value, f, e.fields.source?.line ?? e.line, `epic ${key}`)
+  }
 }
 
 // ── epic docs: .sakal/epics/<KEY>.md (SKA-025, Addendum A1 item 1) ──────────
@@ -436,6 +583,74 @@ const epicDocs = new Map()
       warn(`${DIR}/journeys.yaml`, j.line, 'JMISSING', `journey "${key}" has no journeys/${key}.md record`, 'legitimate mid-authoring — the index names it, the record does not exist yet; prepare emits it')
 }
 
+// ── ONE cite checker (F1 + A13) ─────────────────────────────────────────────
+// A cite is a CLAIM, and an unconfirmable claim looks exactly like evidence.
+// Everything a citation can say gets re-checked here, at the pin, in the repo
+// that owns the file — and every way of failing prints WHICH way it failed.
+// Silence is the one outcome this function may never produce.
+const CITE_HINT = {
+  declaration: 'enforced = an exact-name code DECLARATION in the cited file',
+  test: 'verified = an exact test LABEL — Pest/Dart `test(…)`/`it(…)`, or a PHPUnit `test_*` method (or one annotated #[Test]/@test). Never a `group(…)`',
+  route: 'a route name is proven by the `->name(…)` / `\'as\' => …` literals in the cited route file, exactly or as a composition of its declared prefixes',
+  config: 'a config key is proven by its full dotted KEY PATH through the cited config file\'s array',
+  view: 'a view name is proven by the cited path BEING the file it resolves to (`a.b` → `a/b.blade.php`)',
+  enum_case: 'an enum case is proven by `case <Name>` in the cited file — and by the enum\'s own declaration when you write `Type::Case`',
+  measured: 'a measured cite is proven by re-counting: `count_pattern` over the cited file\'s lines (or a directory\'s entries) must equal `count`',
+}
+function checkCite(c, ac, f) {
+  if (c.kind !== 'enforced' && c.kind !== 'verified') { err(f, c.line, 'CITEKIND', `${ac.id} cite kind "${c.kind}" is not enforced|verified`, 'citation_kind, exactly (Q6)'); return }
+  const sk = c.symbol_kind || defaultSymbolKind(c.kind)
+  const skLine = c.symbol_kindLine ?? c.line
+  if (!SYMBOL_KINDS.has(sk)) { err(f, skLine, 'CITEKIND', `${ac.id} symbol_kind "${sk}" is not one of ${[...SYMBOL_KINDS].join(', ')}`, 'omit it for the default: `declaration` under enforced, `test` under verified'); return }
+  if (SYMBOL_KIND_PROOF[sk] !== c.kind) { err(f, skLine, 'CITEKIND', `${ac.id} symbol_kind "${sk}" belongs under \`kind: ${SYMBOL_KIND_PROOF[sk]}\`, not \`kind: ${c.kind}\``, 'kind carries the PROOF (enforced = the code declares it, verified = a test asserts it); symbol_kind only says what the symbol names'); return }
+  for (const req of ['path', 'symbol', 'sha']) if (!c[req]) err(f, c.line, 'REQUIRED', `${ac.id} cite has no \`${req}\``, 'Q6 shape: kind, path, symbol, sha, optional note (+ symbol_kind, and count/count_pattern when measured)')
+  if (sk === 'measured') for (const req of ['count', 'count_pattern']) if (c[req] == null || c[req] === '')
+    err(f, c.line, 'REQUIRED', `${ac.id} is a measured cite with no \`${req}\``, 'a measured fact is a figure AND the pattern it was counted with — both, or it is a note, not a citation')
+  if (!c.path || !c.symbol) return
+  if (sk === 'measured' && (c.count == null || c.count === '' || !c.count_pattern)) return
+
+  // A13: `<tree-key>:<path>` resolves through the trees map — the sibling
+  // repo's OWN git answers the pin, so a cross-repo citation is checked here
+  // instead of being a guaranteed working-tree fallback or a hard CITEGONE.
+  let root = ROOT, path = c.path, treeKey = null
+  const q = parseTreePath(c.path)
+  if (q) {
+    treeKey = q.tree; path = q.path
+    const t = treesMap.get(treeKey)
+    if (!t) {
+      err(f, c.line, 'XTREE', `${ac.id} cites "${treeKey}:${path}" but "${treeKey}" is not a tree in the map`,
+        treesDeclared ? `declared trees: ${[...treesMap.keys()].join(', ') || '(none)'}`
+          : `no trees map is reachable from here — the spec-home repo declares .sakal/registry/trees.yaml, and this tree points at it with \`project_layer:\` in config.yaml`)
+      return
+    }
+    root = t.root
+  }
+
+  const abs = join(root, path)
+  const wantsDir = sk === 'measured'
+  let content = null, entries = null
+  if (c.sha) {
+    content = gitShow(c.sha, path, root)
+    if (content == null && wantsDir) entries = gitListDir(c.sha, path, root)
+  }
+  if (content == null && entries == null && existsSync(abs)) {
+    const isDir = statSync(abs).isDirectory()
+    if (c.sha) warn(f, c.line, 'PINMISS', `${ac.id} cite pin ${c.sha} does not resolve${treeKey ? ` in the ${treeKey} tree's repo` : ''} — checked the working tree instead`, 're-run prepare to re-pin')
+    if (isDir && !wantsDir) { err(f, c.line, 'CITEGONE', `${ac.id} cites ${c.path}, which is a DIRECTORY`, 'only a measured cite may cite a directory; everything else cites a file'); return }
+    if (isDir) entries = readdirSync(abs)
+    else content = readFileSync(abs, 'utf8')
+  }
+  if (content == null && entries == null) {
+    err(f, c.line, 'CITEGONE', `${ac.id} cites ${c.path}, which resolves neither at ${c.sha ?? '(no sha)'} nor on disk${treeKey ? ` (searched the ${treeKey} tree's repo at ${rel(root)})` : ''}`, 'prepare drops what it cannot re-confirm; so does verify')
+    return
+  }
+  const m = matchCitation({ ...c, symbol_kind: sk }, { content, entries, path })
+  if (!m.ok) err(f, c.line, 'CITEGONE', `${ac.id}: ${m.why}`, CITE_HINT[sk])
+  else if (m.composed)
+    info(f, c.line, 'CITECOMPOSED', `${ac.id}: route "${c.symbol}" is not declared as one literal — reconstructed from ${m.composed.map(p => `"${p}"`).join(' + ')} in ${path}`,
+      'weaker than an exact hit: it proves every piece is declared in that file, not that Laravel composes them in that order. Fine for grouped routes; look twice if the pieces come from unrelated groups.')
+}
+
 // ── stories ──────────────────────────────────────────────────────────────────
 const stories = new Map()
 function walk(d) {
@@ -467,6 +682,23 @@ for (const p of walk(join(dirAbs, 'stories'))) {
     refCheck('journey', journeys, 'journeys.yaml')
     refCheck('persona', personas, 'registry/personas.yaml')
     refCheck('module', modules, 'registry/modules.yaml')
+  } else if (remoteLoaded) {
+    // A13: the seam, checked at last. Under scope: app these keys were
+    // verified NOWHERE — the project layer lives in another checkout, so
+    // verify said (correctly) that it could not see it, and then nobody
+    // else looked either. With `project_layer:` declared it CAN see it.
+    // Warnings by default: a check that did not exist while eleven trees
+    // were written does not get to turn them red on arrival. --strict-xref
+    // is the gate for a tree that has been normalised.
+    const xrefCheck = (k, map, where) => {
+      const v = fm[k]?.value
+      if (!v || !map.size || map.has(v)) return
+      xref(f, fm[k].line, 'XREF', `${k} "${v}" is not declared in the project layer at ${cfg.project_layer.value}`, `add it to ${where} in the spec-home repo, or fix the reference — this is the cross-repo check that ran nowhere before 0.18`)
+    }
+    xrefCheck('epic', remote.epics, 'epics.yaml')
+    xrefCheck('journey', remote.journeys, 'journeys.yaml')
+    xrefCheck('persona', remote.personas, 'registry/personas.yaml')
+    xrefCheck('module', remote.modules, 'registry/modules.yaml')
   }
   if (codebases.size) refCheck('app', codebases, 'registry/codebases.yaml')
   if (scope === 'app' && cfg.app?.value && fm.app?.value && fm.app.value !== cfg.app.value)
@@ -512,21 +744,7 @@ for (const p of walk(join(dirAbs, 'stories'))) {
       if (seen.has(ac.id)) err(f, ac.line, 'DUPKEY', `${ac.id} appears twice in this story`, '')
       seen.add(ac.id)
       if (ac.text == null || ac.text === '') err(f, ac.line, 'REQUIRED', `${ac.id} has no text`, 'text is the spec AC VERBATIM, double-quoted')
-      for (const c of ac.cites) {
-        if (c.kind !== 'enforced' && c.kind !== 'verified') { err(f, c.line, 'CITEKIND', `${ac.id} cite kind "${c.kind}" is not enforced|verified`, 'citation_kind, exactly (Q6)'); continue }
-        for (const req of ['path', 'symbol', 'sha']) if (!c[req]) err(f, c.line, 'REQUIRED', `${ac.id} cite has no \`${req}\``, 'Q6 shape: kind, path, symbol, sha, optional note')
-        if (!c.path || !c.symbol) continue
-        // Re-confirm the grep, through the pin — a cite is a claim, and an
-        // unconfirmable claim looks exactly like evidence.
-        let content = c.sha ? gitShow(c.sha, c.path) : null
-        if (content == null && existsSync(join(ROOT, c.path))) {
-          if (c.sha) warn(f, c.line, 'PINMISS', `${ac.id} cite pin ${c.sha} does not resolve — checked the working tree instead`, 're-run prepare to re-pin')
-          content = readFileSync(join(ROOT, c.path), 'utf8')
-        }
-        if (content == null) { err(f, c.line, 'CITEGONE', `${ac.id} cites ${c.path}, which resolves neither at ${c.sha ?? '(no sha)'} nor on disk`, 'prepare drops what it cannot re-confirm; so does verify'); continue }
-        const hit = c.kind === 'enforced' ? findDeclaration(content, c.symbol) : findTestLabel(content, c.symbol)
-        if (!hit) err(f, c.line, 'CITEGONE', `${ac.id}: no ${c.kind === 'enforced' ? `declaration of "${c.symbol}"` : `test label "${c.symbol}"`} greps in ${c.path}`, 'enforced = exact-name declaration; verified = exact innermost test(…) label — never group')
-      }
+      for (const c of ac.cites) checkCite(c, ac, f)
     })
     if (!sawFence) err(f, bodyStart, 'NOACS', `story ${key} has no fenced yaml AC block`, 'ACs live under `## Acceptance criteria` in a ```yaml fence')
 
@@ -663,15 +881,24 @@ const errors = scoped.filter(p => p.sev === 'error')
 const warns = scoped.filter(p => p.sev === 'warn')
 const infos = scoped.filter(p => p.sev === 'info')
 
+// process.exit() TRUNCATES a pending pipe write: on a tree big enough to push
+// the --json report past the OS pipe buffer (~64 KiB on macOS) the consumer
+// got half a document and a parse error. exitCode + a natural exit lets the
+// write drain. Found while running this suite over modules/POS, which reports
+// 79 KB — every consumer of --json on a large tree was affected.
 if (JSON_OUT) {
   console.log(JSON.stringify({ ok: !errors.length, scope, scopeFilter: SCOPE,
-    counts: { journeys: journeys.size, epics: epics.size, epicDocs: epicDocs.size, stories: stories.size },
+    counts: { journeys: journeys.size, epics: epics.size, epicDocs: epicDocs.size, stories: stories.size, trees: treesMap.size },
     problems: scoped, proposals }, null, 2))
-  process.exit(errors.length ? 1 : 0)
+  process.exitCode = errors.length ? 1 : 0
 }
+else {
 
 console.log(`\n  .sakal/ — scope: ${scope} · ${journeys.size} journeys · ${epics.size || epicDocs.size} epics · ${stories.size} stories`)
-console.log(`  target: ${cfg.project?.value ?? '?'}${cfg.app ? ` / ${cfg.app.value}` : ''}\n`)
+console.log(`  target: ${cfg.project?.value ?? '?'}${cfg.app ? ` / ${cfg.app.value}` : ''}`)
+console.log(treesMap.size
+  ? `  trees:  ${treesMap.size} linked .sakal/ tree(s)${projectLayerLocal ? '' : ` via project_layer: ${cfg.project_layer.value}`}${STRICT_XREF ? ' · --strict-xref' : ''}\n`
+  : '  trees:  none linked — cross-repo citations and references are unchecked (see registry/trees.yaml)\n')
 for (const p of [...errors, ...warns, ...infos]) {
   const tag = p.sev === 'error' ? '\x1b[31merror\x1b[0m' : p.sev === 'warn' ? '\x1b[33mwarn \x1b[0m' : '\x1b[36minfo \x1b[0m'
   console.log(`  ${tag} ${p.file}:${p.line}  [${p.code}] ${p.msg}`)
@@ -681,8 +908,10 @@ console.log()
 if (errors.length) {
   console.log(`\x1b[31m  VERIFY FAILED — ${errors.length} error(s), ${warns.length} warning(s).\x1b[0m`)
   console.log('  Fix the files above and run verify again.\n')
-  process.exit(1)
+  process.exitCode = 1
+} else {
+  console.log(`\x1b[32m  VERIFY GREEN — 0 errors, ${warns.length} warning(s).\x1b[0m`)
+  console.log('  Warnings are findings, not blockers — they belong in findings.md.\n')
+  process.exitCode = 0
 }
-console.log(`\x1b[32m  VERIFY GREEN — 0 errors, ${warns.length} warning(s).\x1b[0m`)
-console.log('  Warnings are findings, not blockers — they belong in findings.md.\n')
-process.exit(0)
+}

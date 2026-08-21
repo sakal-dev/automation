@@ -95,25 +95,110 @@ Every story and every AC carries `source:`.
 - A source pointing at a document that no longer exists is an **error**, not a
   warning: it looks like evidence and is not.
 
-## Uncitable ACs (SPOS-270)
+## The citation grammar (0.18)
 
-Two shapes of true AC that a `cite:` cannot point at directly:
+A cite has two fields that decide what verify looks for.
 
-- **True-but-statistical** — an AC asserting an aggregate ("89 permission
-  cases", "20 epics"), where no single declaration IS the count. Cite the
-  nearest in-module declaration that the figure was counted from or against
-  (the enum, the loop, the directory), and put the verified figure — and how
-  it was verified — in that cite's `note:`. The citation anchors the claim to
-  code that can drift and be re-checked; the note carries what a symbol lookup
-  cannot.
-- **Cross-repo / submodule evidence** — an AC proven by code that lives in a
-  sibling repo, not this one. Cite it with `sha:` set to *that repo's own*
-  commit, not this repo's. Verify cannot `git show` a sha from a repo it
-  is not inside, so this always falls through to the **working-tree
-  fallback** and reports `PINMISS` — expected, not a defect. It means "found
-  on disk, pin unresolvable from here," which is the honest state for
-  evidence outside this checkout. Do not chase it to zero by dropping the
-  cite or forging a local sha.
+**`kind:`** carries the PROOF, and still has exactly two values. This is the
+one people get backwards from English intuition — follow the linter, not the
+word:
+
+- **`enforced`** — the CODE DECLARES this thing.
+- **`verified`** — a TEST ASSERTS this thing.
+
+**`symbol_kind:`** is optional and says what KIND of thing `symbol:` names, so
+the matcher knows what to look for. Omit it and you get the 0.17.0 behaviour
+exactly: `declaration` under `enforced`, `test` under `verified`. Every cite
+written before 0.18 keeps its meaning, unchanged.
+
+| `symbol_kind` | under | `symbol:` is | proven by |
+|---|---|---|---|
+| `declaration` *(default)* | enforced | a code symbol | an exact-name declaration in the cited file |
+| `test` *(default)* | verified | a test label | a Pest/Dart `test(…)`/`it(…)` label, **or** a PHPUnit `test_*` method (or one annotated `#[Test]`/`@test`) |
+| `route` | enforced | a route name | the `->name(…)` / `'as' => …` literals in the cited route file |
+| `config` | enforced | a dotted config key | that full KEY PATH through the cited config file's array |
+| `view` | enforced | a template name | the cited path BEING the file the name resolves to |
+| `enum_case` | enforced | `Type::Case` or `Case` | `case <Name>` in the cited file (plus the enum's own declaration when you write the type) |
+| `measured` | enforced | what was counted | re-counting `count_pattern` and getting `count` |
+
+Crossing them — `symbol_kind: test` under `enforced`, `symbol_kind: route`
+under `verified` — is a `CITEKIND` error, not a shrug.
+
+Two things worth knowing before you use them:
+
+- **A route name is often composed.** Laravel assembles
+  `api.order.v1.admin.orders.index` from group prefixes plus a leaf `->name()`,
+  so the whole string appears nowhere. Verify accepts a composition of declared
+  prefixes and reports `CITECOMPOSED` when it used one. That is *weaker* than an
+  exact hit: it proves every piece is declared in that file, not that Laravel
+  composes them in that order. Fine for one grouped route file; look twice if
+  the pieces come from unrelated groups.
+- **A config key is a PATH, not a name.** `order.tax.enabled` matches only the
+  `enabled` under `tax`, never some other `'enabled' =>` elsewhere in the file.
+  Laravel's file-name segment (`config/order.php` → `order.*`) may be included
+  or left off; both read the same.
+
+## Measured ACs — the true-but-uncitable statistic
+
+An AC whose truth is a COUNT ("89 permission cases", "20 epic files") has no
+declaration that IS the count. Before 0.18 the convention parked the figure in
+a `note:`, where nothing could ever re-check it — drift with a paper trail.
+
+Cite it as a measurement instead:
+
+```yaml
+    - kind: enforced
+      symbol_kind: measured
+      path: app/Enums/PermissionEnum.php
+      symbol: PermissionEnum
+      count: 89
+      count_pattern: "^\\s*case "
+      sha: a1bb9b6
+```
+
+`count_pattern` is a regex matched **per line** of the cited file — or per
+**entry name** when `path` is a directory, which is how you count files. Verify
+re-counts at the pin every run: add a permission and the AC goes red, which is
+the entire point of a citation. Both fields are required; a figure with no
+method is a note, not a citation.
+
+## Cross-repo evidence — the trees map
+
+An AC proven by code in a sibling repo is cited through the **trees map**, a
+project-layer file (`registry/trees.yaml`) naming each repo's `.sakal/` tree:
+
+```yaml
+trees:
+  - order-module — ../pos-laravel/modules/Order/.sakal
+    repo: sakal-dev/sakal
+```
+
+An app tree reaches it by declaring `project_layer: ../<spec-home>/.sakal` in
+its own `config.yaml`. Then:
+
+- **Cite it as `path: <tree-key>:<path-inside-that-repo>`,** with `sha:` set to
+  *that repo's own* commit. Verify resolves the pin **inside that repo's git**,
+  so a cross-repo citation is checked like any other — it no longer falls
+  through to the working tree and reports `PINMISS` by construction, and it is
+  no longer a hard `CITEGONE`.
+- A tree key that is not in the map is an `XTREE` **error**. There is no quiet
+  path: an unresolvable cross-repo cite fails loudly or it is not a cite.
+- A `../sibling/…` relative path still means what it always meant (resolved
+  from this repo root, pin unresolvable, `PINMISS`) — only a bare `key:` prefix
+  is cross-repo.
+
+With `project_layer:` declared, a `scope: app` tree's references to project-layer
+keys (`epic`, `journey`, `persona`, `module`, and its own `app`) are checked
+against the spec-home for the first time. They are **warnings** (`XREF`) by
+default, for the same reason the granularity bounds are: a check that did not
+exist while eleven trees were being written does not get to turn them red on
+arrival. `--strict-xref` promotes them to errors once a tree is normalised.
+
+A retired epic points at where it went instead of describing it in prose:
+`superseded_by: <tree-key>[:<EPIC-KEY>]` on the `epics.yaml` row is resolved
+through the map every run — the tree must be declared and the epic doc must
+exist there. A row that resolves reports `RETIRED` (info) instead of `DRAFTED`,
+because it did not vanish, it moved.
 
 ## Imported vs authored — the precedence rule (SKA-025, ruled)
 
